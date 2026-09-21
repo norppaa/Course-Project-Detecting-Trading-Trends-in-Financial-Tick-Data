@@ -1,0 +1,1 @@
+# Course-Project-Detecting-Trading-Trends-in-Financial-Tick-Data
