@@ -1,0 +1,4 @@
+
+#Ignore large dataset files
+data/*.csv          
+data/*.csv.gz
