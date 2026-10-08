@@ -51,3 +51,24 @@ services:
       - redpanda-net
     depends_on:
       - redpanda
+
+  redpanda-init:
+    image: docker.redpanda.com/redpandadata/redpanda:latest
+    container_name: redpanda-init
+    depends_on:
+      - redpanda
+    entrypoint: /bin/sh
+    command: >
+      -c "
+        echo 'Waiting for Redpanda to be ready...';
+        while ! rpk cluster info --brokers redpanda:9092 > /dev/null 2>&1; do
+          sleep 1;
+        done;
+        echo 'Redpanda is ready! Creating topics...';
+        rpk topic create market-ticks --brokers redpanda:9092 --partitions 4 || true;
+        rpk topic create trading-signals --brokers redpanda:9092 --partitions 4 || true;
+        echo 'Topics initialized successfully!';
+        rpk topic list --brokers redpanda:9092;
+      "
+    networks:
+      - redpanda-net
