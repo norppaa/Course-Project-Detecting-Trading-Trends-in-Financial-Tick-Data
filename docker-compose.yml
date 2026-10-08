@@ -139,7 +139,7 @@ services:
       dockerfile: Dockerfile
     container_name: web-frontend
     ports:
-      - "3000:3000"
+      - "3000:80"
     networks:
       - redpanda-net
     depends_on:
