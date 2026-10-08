@@ -1,0 +1,146 @@
+networks:
+  redpanda-net:
+    name: redpanda-net
+    driver: bridge
+
+volumes:
+  redpanda-data:
+
+services:
+  # ============================================================
+  # 1. MESSAGE BROKER & INFRASTRUCTURE (Always started by default)
+  # ============================================================
+  redpanda:
+    image: docker.redpanda.com/redpandadata/redpanda:latest
+    container_name: redpanda
+    command:
+      - redpanda
+      - start
+      - --kafka-addr internal://0.0.0.0:9092,external://0.0.0.0:19092
+      # internal: for containers in docker network (redpanda:9092)
+      # external: for apps running directly on localhost (localhost:19092)
+      - --advertise-kafka-addr internal://redpanda:9092,external://localhost:19092
+      - --pandaproxy-addr 0.0.0.0:8082
+      - --advertise-pandaproxy-addr localhost:8082
+      - --schema-registry-addr 0.0.0.0:8081
+      - --rpc-addr 0.0.0.0:33145
+      - --advertise-rpc-addr redpanda:33145
+      - --mode dev-container
+      - --smp 1
+      - --memory 1G
+    ports:
+      - "19092:19092" # Kafka API for host applications (e.g. go run)
+      - "9644:9644"   # Admin API
+    volumes:
+      - redpanda-data:/var/lib/redpanda/data
+    networks:
+      - redpanda-net
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster info --brokers redpanda:9092 > /dev/null 2>&1 || exit 1"]
+      interval: 3s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  console:
+    image: docker.redpanda.com/redpandadata/console:latest
+    container_name: redpanda-console
+    entrypoint: /bin/sh
+    command: -c 'echo "$$CONSOLE_CONFIG_FILE" > /tmp/config.yml; /app/console'
+    environment:
+      CONFIG_FILEPATH: /tmp/config.yml
+      CONSOLE_CONFIG_FILE: |
+        kafka:
+          brokers: ["redpanda:9092"]
+        redpanda:
+          adminApi:
+            enabled: true
+            urls: ["http://redpanda:9644"]
+    ports:
+      - "8080:8080" # Web UI: http://localhost:8080
+    networks:
+      - redpanda-net
+    depends_on:
+      redpanda:
+        condition: service_healthy
+
+  redpanda-init:
+    image: docker.redpanda.com/redpandadata/redpanda:latest
+    container_name: redpanda-init
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    entrypoint: /bin/sh
+    command: >
+      -c "
+        echo 'Redpanda is healthy! Initializing topics...';
+        rpk topic create market-ticks --brokers redpanda:9092 --partitions 4 || true;
+        rpk topic create trading-signals --brokers redpanda:9092 --partitions 4 || true;
+        echo 'Topics initialized successfully:';
+        rpk topic list --brokers redpanda:9092;
+      "
+    networks:
+      - redpanda-net
+
+  # ============================================================
+  # 2. APPLICATION SERVICES (Enabled via: docker compose --profile app up)
+  # ============================================================
+  producer:
+    profiles: ["app", "all"]
+    build:
+      context: .
+      dockerfile: producer/Dockerfile
+    container_name: tick-producer
+    environment:
+      - KAFKA_BROKERS=redpanda:9092
+      - INPUT_FILE=/data/trades_cleaned.csv
+    volumes:
+      - ./data:/data:ro
+    networks:
+      - redpanda-net
+    depends_on:
+      redpanda-init:
+        condition: service_completed_successfully
+
+  analyzer:
+    profiles: ["app", "all"]
+    build:
+      context: .
+      dockerfile: analyzer/Dockerfile
+    container_name: stream-analyzer
+    environment:
+      - KAFKA_BROKERS=redpanda:9092
+    networks:
+      - redpanda-net
+    depends_on:
+      redpanda-init:
+        condition: service_completed_successfully
+
+  gateway:
+    profiles: ["app", "all"]
+    build:
+      context: .
+      dockerfile: gateway/Dockerfile
+    container_name: web-gateway
+    ports:
+      - "8081:8081" # WebSocket/HTTP API
+    environment:
+      - KAFKA_BROKERS=redpanda:9092
+    networks:
+      - redpanda-net
+    depends_on:
+      redpanda-init:
+        condition: service_completed_successfully
+
+  frontend:
+    profiles: ["app", "all"]
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: web-frontend
+    ports:
+      - "3000:80"
+    networks:
+      - redpanda-net
+    depends_on:
+      - gateway

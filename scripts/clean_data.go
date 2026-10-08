@@ -98,7 +98,7 @@ func main() {
 				secType := cols[1]
 				date := cols[2]
 				timeVal := cols[3]
-				lastPrice := cols[21] // 0-indexed column 22
+				lastPrice := cols[21]   // 0-indexed column 22
 				tradingTime := cols[23] // 0-indexed column 24
 				tradingDate := cols[26] // 0-indexed column 27
 
