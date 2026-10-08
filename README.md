@@ -114,3 +114,41 @@ When you are ready to test the entire containerized pipeline together:
 docker compose --profile app up -d --build
 ```
 
+---
+
+## 6. Code Quality & Tooling (Formatting, Linting & Testing)
+
+Go includes robust built-in tooling that eliminates the need for heavy external linters in most projects.
+
+### Built-in Go Tools (No Extra Installation Needed)
+
+- **`go fmt ./...` (Auto-Formatter):**
+  Enforces the official Go style standard across all files. Run this before committing:
+  ```bash
+  go fmt ./...
+  ```
+- **`go vet ./...` (Official Static Analyzer & Bug Finder):**
+  Inspects code for subtle bugs, unreachable code, printf format errors, bad mutex usage, and suspicious logic:
+  ```bash
+  go vet ./...
+  ```
+- **`go build ./...` (Fast Syntax & Type Check):**
+  Compiles all packages to verify syntax and types without outputting binary files:
+  ```bash
+  go build ./...
+  ```
+- **`go test -race ./...` (Concurrency Race Detector):**
+  Detects unsynchronized concurrent read/write memory access at runtime. Highly recommended when testing the stream analyzer:
+  ```bash
+  go test -race ./...
+  ```
+
+### Recommended Editor Setup (Real-Time Error Checking)
+
+- **VS Code:** Install the official **Go extension** by the Go team (`golang.go`). It automatically runs `gopls` (the Go language server), giving you:
+  - Red squiggly lines on syntax/type errors in real time as you type.
+  - Auto-completion for structs, methods, and Kafka libraries.
+  - Automatic import addition/removal and format-on-save.
+- **GoLand:** Real-time syntax checking and static analysis work out of the box.
+
+
