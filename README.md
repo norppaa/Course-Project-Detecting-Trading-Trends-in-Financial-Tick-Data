@@ -81,7 +81,85 @@ see scripts/readme.md
 
 ## 4. Message Schemas & Contracts
 
-Define later
+### 4.1 Topic: `trading-signals` (Output of Component 3 Analyzer ➔ Input of Component 4 Gateway)
+
+Every time a 5-minute tumbling window completes for a symbol, the Stream Analyzer emits a JSON message to `trading-signals` with the following structure:
+
+```json
+{
+  "symbol": "RDSA.NL",
+  "sec_type": "E",
+  "window_start": "2021-11-08T09:00:00Z",
+  "window_end": "2021-11-08T09:05:00Z",
+  "window_index": 108,
+  "close": 19.852,
+  "ema38": 19.824,
+  "ema100": 19.780,
+  "signal": "BUY",
+  "trade_count": 142,
+  "timestamp": "2021-11-08T09:05:00Z"
+}
+```
+
+#### Field Specifications:
+- `symbol` (string, required): Instrument symbol with exchange suffix (e.g., `RDSA.NL`, `AIR.FR`, `BMW.ETR`). Also accepts `id` or `ID`.
+- `sec_type` (string, optional): Security type (`E` for equity, `I` for index).
+- `window_start` / `window_end` (string or epoch, required): Tumbling window boundary timestamps (RFC3339, standard date string, or millisecond epoch).
+- `window_index` (integer): Sequential window counter since start of trading day.
+- `close` (float64, required): $Close_{s, w_i}$ — last observed trade price in the window. Also accepts `last`.
+- `ema38` (float64, required): $EMA^{38}_{s, w_i}$ computed via Query 1 formula.
+- `ema100` (float64, required): $EMA^{100}_{s, w_i}$ computed via Query 1 formula.
+- `signal` (string, optional): Query 2 breakout advisory. Set to `"BUY"` upon bullish breakout, `"SELL"` upon bearish breakout, or empty string / `"HOLD"` when no crossover occurs.
+- `timestamp` (string or epoch): Event creation timestamp.
+
+---
+
+### 4.2 Web Gateway API & WebSocket Protocol (Components 4 & 5)
+
+#### WebSocket Endpoint: `ws://localhost:8081/ws`
+Supports real-time filtered streaming between the browser frontend and gateway.
+
+**Client Commands (Inbound to Gateway):**
+```json
+// Subscribe to specific symbols
+{ "action": "subscribe", "symbols": ["RDSA.NL", "AIR.FR"] }
+
+// Unsubscribe
+{ "action": "unsubscribe", "symbols": ["RDSA.NL"] }
+
+// Request window history for chart rendering
+{ "action": "get_history", "symbol": "RDSA.NL" }
+
+// Heartbeat ping
+{ "action": "ping" }
+```
+
+**Gateway Events (Outbound to Client):**
+- `type: "info"`: Server handshake with available symbols, stats, and recent alerts.
+- `type: "signal"`: Live window update for subscribed symbol (`data: SignalEvent`).
+- `type: "alert"`: Immediate breakout advisory broadcast (`data: SignalEvent`).
+- `type: "history"`: Historical window array for charting (`data: []SignalEvent`).
+
+#### REST Endpoints:
+- `GET http://localhost:8081/health`: Gateway healthcheck and active client count.
+- `GET http://localhost:8081/api/symbols`: JSON list of all known symbols.
+- `GET http://localhost:8081/api/history?symbol=RDSA.NL&limit=200`: Historical candle/EMA points.
+- `GET http://localhost:8081/api/alerts?limit=50`: Recent BUY and SELL advisories.
+- `GET http://localhost:8081/api/stats`: Store and throughput metrics.
+
+---
+
+### 4.3 Running Components 4 & 5 Standalone (Mock Mode)
+
+To run the Gateway and Frontend without needing the full Kafka pipeline running:
+```bash
+# Start Gateway with mock data generator (simulates DEBS 2022 market ticks and real crossovers)
+go run ./gateway/main.go -mock
+
+# Open your browser:
+# http://localhost:8081 (directly served by Gateway)
+# or http://localhost:3000 (via nginx frontend container)
+```
 
 ---
 

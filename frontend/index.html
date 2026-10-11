@@ -2,10 +2,156 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Trading Trends Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Trading Trends Terminal | CS-E4780</title>
+  <link rel="stylesheet" href="style.css">
+  <!-- TradingView Lightweight Charts (CDN with offline fallback) -->
+  <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
 </head>
 <body>
-  <h1>Trading Trends Dashboard</h1>
-  <p>Frontend initialized. Ready for implementation.</p>
+  <div class="terminal-container">
+    <!-- Top Bar -->
+    <header class="top-bar">
+      <div class="brand">
+        <div class="brand-logo">▲▼</div>
+        <div class="brand-text">
+          <h1>TRADING TRENDS TERMINAL</h1>
+          <span class="subtitle">CS-E4780 Scalable Systems • Intraday Breakout Strategy (EMA 38/100)</span>
+        </div>
+      </div>
+
+      <div class="telemetry">
+        <div class="stat-pill">
+          <span class="stat-label">STATUS</span>
+          <span id="connection-status" class="status-badge connecting">Connecting...</span>
+        </div>
+        <div class="stat-pill">
+          <span class="stat-label">TOTAL WINDOWS</span>
+          <span id="total-windows" class="stat-val">0</span>
+        </div>
+        <div class="stat-pill">
+          <span class="stat-label">SYMBOLS</span>
+          <span id="active-symbols-count" class="stat-val">0</span>
+        </div>
+        <div class="stat-pill alert-pill-buy">
+          <span class="stat-label">BUY ADVISORIES</span>
+          <span id="total-buy-alerts" class="stat-val green">0</span>
+        </div>
+        <div class="stat-pill alert-pill-sell">
+          <span class="stat-label">SELL ADVISORIES</span>
+          <span id="total-sell-alerts" class="stat-val red">0</span>
+        </div>
+      </div>
+
+      <div class="header-actions">
+        <button id="btn-sound" class="btn-icon active" title="Toggle Alert Chime">🔔 Sound: ON</button>
+        <button id="btn-reconnect" class="btn-sm" title="Reconnect WebSocket">🔄 Reconnect</button>
+      </div>
+    </header>
+
+    <!-- Symbols Watchlist Bar -->
+    <nav class="symbols-bar">
+      <div class="symbol-search-box">
+        <input type="text" id="symbol-search" placeholder="Search symbol (e.g. RDSA.NL, AIR.FR)..." />
+      </div>
+      <div id="quick-symbols" class="quick-symbols-list">
+        <!-- Dynamically populated symbol pills -->
+      </div>
+    </nav>
+
+    <!-- Main Workspace -->
+    <main class="workspace-grid">
+      <!-- Chart Panel -->
+      <section class="chart-panel card">
+        <div class="card-header">
+          <div class="symbol-quote">
+            <span id="chart-symbol" class="quote-symbol">RDSA.NL</span>
+            <span id="chart-exchange" class="badge-exchange">Amsterdam (NL)</span>
+            <span id="chart-price" class="quote-price">--.--</span>
+            <span id="chart-signal-badge" class="quote-signal neutral">WAITING DATA</span>
+          </div>
+
+          <div class="indicator-legend">
+            <span class="legend-item ema38"><span class="dot ema38-dot"></span> EMA(38): <strong id="val-ema38">--.--</strong></span>
+            <span class="legend-item ema100"><span class="dot ema100-dot"></span> EMA(100): <strong id="val-ema100">--.--</strong></span>
+            <span class="legend-item spread">Spread: <strong id="val-spread">--.--</strong></span>
+          </div>
+        </div>
+
+        <!-- Chart Container -->
+        <div id="chart-container" class="chart-viewport">
+          <canvas id="fallback-canvas"></canvas>
+        </div>
+
+        <div class="chart-footer">
+          <div class="chart-info">
+            <span>5-minute tumbling windows (CEST event time)</span>
+            <span id="window-timestamp">Last Window: --:--:--</span>
+          </div>
+          <div class="chart-controls">
+            <label><input type="checkbox" id="toggle-ema38" checked> EMA 38</label>
+            <label><input type="checkbox" id="toggle-ema100" checked> EMA 100</label>
+            <label><input type="checkbox" id="toggle-markers" checked> Breakout Markers</label>
+          </div>
+        </div>
+      </section>
+
+      <!-- Sidebar: Alerts & Market Overview -->
+      <aside class="sidebar-panels">
+        <!-- Live Breakout Alerts Feed -->
+        <section class="card alert-feed-panel">
+          <div class="card-header">
+            <h2>⚡ Breakout Advisories (Query 2)</h2>
+            <div class="filter-pills">
+              <button class="filter-pill active" data-filter="all">All</button>
+              <button class="filter-pill" data-filter="BUY">Buys</button>
+              <button class="filter-pill" data-filter="SELL">Sells</button>
+            </div>
+          </div>
+          <div id="alerts-list" class="alerts-feed-content">
+            <div class="empty-state">Awaiting breakout events from stream analyzer...</div>
+          </div>
+        </section>
+
+        <!-- Market Overview Table -->
+        <section class="card market-table-panel">
+          <div class="card-header">
+            <h2>📊 Market Overview</h2>
+            <span class="badge-sub">All Tracked Symbols</span>
+          </div>
+          <div class="table-scroll">
+            <table class="market-table">
+              <thead>
+                <tr>
+                  <th>Symbol</th>
+                  <th>Last</th>
+                  <th>EMA 38</th>
+                  <th>EMA 100</th>
+                  <th>Trend</th>
+                </tr>
+              </thead>
+              <tbody id="market-table-body">
+                <tr><td colspan="5" class="empty-cell">Waiting for ticks...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </aside>
+    </main>
+
+    <!-- Bottom Status / Diagnostics Footer -->
+    <footer class="bottom-bar">
+      <div class="pipeline-flow">
+        <span>Pipeline: <strong>Redpanda Broker</strong> ➔ <strong>Stream Analyzer</strong> (5m Tumbling Windows) ➔ <strong>Go Gateway</strong> (/ws) ➔ <strong>TradingView Terminal</strong></span>
+      </div>
+      <div class="gateway-config">
+        <span>Gateway WS:</span>
+        <input type="text" id="ws-url-input" value="" />
+        <button id="btn-apply-ws" class="btn-xs">Connect</button>
+      </div>
+    </footer>
+  </div>
+
+  <script src="app.js"></script>
 </body>
 </html>
