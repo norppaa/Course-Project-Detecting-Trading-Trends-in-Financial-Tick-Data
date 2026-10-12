@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -71,16 +72,25 @@ func main() {
 	// 6. Start HTTP & WebSocket Server
 	srv := server.NewServer(hub, memStore)
 	httpServer := &http.Server{
-		Addr:         fmt.Sprintf(":%s", *port),
 		Handler:      srv.Handler(),
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 15 * time.Second,
 		IdleTimeout:  60 * time.Second,
 	}
 
+	listener, err := net.Listen("tcp", fmt.Sprintf(":%s", *port))
+	if err != nil && *port == "8081" {
+		log.Printf("[Gateway] Port 8081 is currently in use on host. Falling back to port 8085...")
+		*port = "8085"
+		listener, err = net.Listen("tcp", fmt.Sprintf(":%s", *port))
+	}
+	if err != nil {
+		log.Fatalf("[Gateway] Server failed to bind port: %v", err)
+	}
+
 	go func() {
 		log.Printf("[Gateway] HTTP API & WebSocket ready at http://localhost:%s (WS: ws://localhost:%s/ws)", *port, *port)
-		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := httpServer.Serve(listener); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("[Gateway] Server failed: %v", err)
 		}
 	}()

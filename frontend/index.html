@@ -3,154 +3,828 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Trading Trends Terminal | CS-E4780</title>
+  <title>Trading Trends Monitor | CS-E4780</title>
   <link rel="stylesheet" href="style.css">
-  <!-- TradingView Lightweight Charts (CDN with offline fallback) -->
-  <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+  <style>
+    /* Inlined Critical Styles (guarantees stunning visual rendering even if external CSS fails) */
+    :root {
+      --bg-dark: #0b0f19;
+      --bg-card: #111827;
+      --bg-card-header: #1a2333;
+      --bg-hover: #1e293b;
+      --border: #1f293d;
+      --border-bright: #334155;
+      --text: #f8fafc;
+      --text-muted: #94a3b8;
+      --text-dim: #64748b;
+      --buy: #10b981;
+      --buy-glow: rgba(16, 185, 129, 0.25);
+      --sell: #ef4444;
+      --sell-glow: rgba(239, 68, 68, 0.25);
+      --ema38: #00e5ff;
+      --ema100: #ff9100;
+      --accent: #3b82f6;
+      --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background-color: var(--bg-dark);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      font-size: 13px;
+      line-height: 1.5;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* Top Navigation Bar */
+    .navbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: var(--bg-card);
+      border-bottom: 1px solid var(--border);
+      padding: 10px 20px;
+      gap: 16px;
+      flex-shrink: 0;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .brand-icon {
+      font-size: 22px;
+      background: linear-gradient(135deg, #10b981, #3b82f6);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .brand h1 {
+      font-size: 16px;
+      font-weight: 800;
+      letter-spacing: -0.3px;
+      color: #ffffff;
+    }
+
+    .brand span {
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+
+    .nav-center {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .select-symbol {
+      background: #080c14;
+      color: #ffffff;
+      border: 1px solid var(--border-bright);
+      padding: 6px 12px;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 700;
+      font-family: var(--font-mono);
+      cursor: pointer;
+      outline: none;
+    }
+
+    .symbol-pills {
+      display: flex;
+      gap: 6px;
+    }
+
+    .sym-pill {
+      background: #141c2b;
+      color: var(--text-muted);
+      border: 1px solid var(--border);
+      padding: 5px 12px;
+      border-radius: 16px;
+      font-size: 12px;
+      font-weight: 600;
+      font-family: var(--font-mono);
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+
+    .sym-pill:hover {
+      background: var(--bg-hover);
+      color: #ffffff;
+      border-color: var(--accent);
+    }
+
+    .sym-pill.active {
+      background: var(--accent);
+      color: #ffffff;
+      border-color: var(--accent);
+      box-shadow: 0 0 10px rgba(59, 130, 246, 0.4);
+    }
+
+    .nav-right {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .status-badge {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      font-weight: 700;
+      padding: 5px 10px;
+      border-radius: 6px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .status-badge.live {
+      background: var(--buy-glow);
+      color: var(--buy);
+      border: 1px solid var(--buy);
+    }
+
+    .status-badge.connecting {
+      background: rgba(245, 158, 11, 0.15);
+      color: #f59e0b;
+      border: 1px solid #f59e0b;
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: currentColor;
+      box-shadow: 0 0 8px currentColor;
+    }
+
+    .btn {
+      background: #141c2b;
+      color: var(--text);
+      border: 1px solid var(--border-bright);
+      padding: 6px 12px;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+
+    .btn:hover {
+      background: var(--bg-hover);
+      border-color: var(--accent);
+    }
+
+    /* KPI Metrics Banner */
+    .kpi-row {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 12px;
+      padding: 12px 20px;
+      flex-shrink: 0;
+    }
+
+    .kpi-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px 14px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .kpi-card::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 3px;
+      background: var(--border-bright);
+    }
+
+    .kpi-card.card-price::before { background: #3b82f6; }
+    .kpi-card.card-ema38::before { background: var(--ema38); }
+    .kpi-card.card-ema100::before { background: var(--ema100); }
+    .kpi-card.card-signal::before { background: var(--buy); }
+    .kpi-card.card-telemetry::before { background: #8b5cf6; }
+
+    .kpi-title {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--text-muted);
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .kpi-value-box {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      margin: 6px 0 2px 0;
+    }
+
+    .kpi-num {
+      font-size: 22px;
+      font-weight: 800;
+      font-family: var(--font-mono);
+      letter-spacing: -0.5px;
+      color: #ffffff;
+    }
+
+    .kpi-tag {
+      font-size: 10px;
+      font-weight: 700;
+      padding: 2px 6px;
+      border-radius: 4px;
+      background: #1e293b;
+      color: var(--text-muted);
+    }
+
+    .kpi-tag.buy { background: var(--buy-glow); color: var(--buy); border: 1px solid var(--buy); }
+    .kpi-tag.sell { background: var(--sell-glow); color: var(--sell); border: 1px solid var(--sell); }
+
+    .kpi-footer {
+      font-size: 11px;
+      color: var(--text-dim);
+    }
+
+    .kpi-telemetry-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 3px 8px;
+      font-size: 11px;
+      margin-top: 4px;
+    }
+
+    .kpi-telemetry-grid span { color: var(--text-muted); }
+    .kpi-telemetry-grid strong { color: #ffffff; font-family: var(--font-mono); }
+
+    /* Main Workspace Grid */
+    .workspace {
+      display: grid;
+      grid-template-columns: 1fr 440px;
+      gap: 12px;
+      padding: 0 20px 12px 20px;
+      flex: 1;
+      overflow: hidden;
+    }
+
+    .panel {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+    }
+
+    .panel-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: var(--bg-card-header);
+      border-bottom: 1px solid var(--border);
+      padding: 10px 16px;
+    }
+
+    .panel-header h2 {
+      font-size: 13px;
+      font-weight: 700;
+      color: #ffffff;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .chart-controls {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .chart-control-label {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-muted);
+      cursor: pointer;
+    }
+
+    .legend-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      display: inline-block;
+    }
+
+    .dot-ema38 { background: var(--ema38); box-shadow: 0 0 6px var(--ema38); }
+    .dot-ema100 { background: var(--ema100); box-shadow: 0 0 6px var(--ema100); }
+
+    .chart-stage {
+      flex: 1;
+      position: relative;
+      background: #070a10;
+      overflow: hidden;
+    }
+
+    #chart-canvas {
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+
+    .chart-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: var(--bg-card-header);
+      border-top: 1px solid var(--border);
+      padding: 8px 16px;
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+
+    /* Tabs Inspector (Right Panel) */
+    .tabs-bar {
+      display: flex;
+      background: var(--bg-card-header);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .tab-item {
+      flex: 1;
+      padding: 10px 12px;
+      text-align: center;
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--text-muted);
+      background: transparent;
+      border: none;
+      border-bottom: 2px solid transparent;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+
+    .tab-item:hover {
+      color: #ffffff;
+      background: rgba(255, 255, 255, 0.03);
+    }
+
+    .tab-item.active {
+      color: #ffffff;
+      border-bottom-color: var(--accent);
+      background: rgba(59, 130, 246, 0.1);
+    }
+
+    .tab-view {
+      display: none;
+      flex: 1;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .tab-view.active {
+      display: flex;
+    }
+
+    .tab-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 14px;
+      background: #0d131f;
+      border-bottom: 1px solid var(--border);
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+
+    .pill-filter-group {
+      display: flex;
+      gap: 4px;
+    }
+
+    .pill-filter {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    .pill-filter.active {
+      background: var(--accent);
+      color: #ffffff;
+      border-color: var(--accent);
+    }
+
+    .scroll-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 10px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    /* Alert Cards */
+    .alert-card {
+      background: #0f1624;
+      border: 1px solid var(--border);
+      border-left: 4px solid var(--border-bright);
+      border-radius: 6px;
+      padding: 10px 12px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+
+    .alert-card:hover {
+      background: var(--bg-hover);
+      border-color: var(--border-bright);
+      transform: translateY(-1px);
+    }
+
+    .alert-card.buy {
+      border-left-color: var(--buy);
+      background: linear-gradient(90deg, rgba(16, 185, 129, 0.08) 0%, #0f1624 35%);
+    }
+
+    .alert-card.sell {
+      border-left-color: var(--sell);
+      background: linear-gradient(90deg, rgba(239, 68, 68, 0.08) 0%, #0f1624 35%);
+    }
+
+    .alert-badge {
+      font-size: 10px;
+      font-weight: 800;
+      padding: 3px 6px;
+      border-radius: 4px;
+      text-transform: uppercase;
+      font-family: var(--font-mono);
+    }
+
+    .alert-badge.buy { background: var(--buy); color: #000000; }
+    .alert-badge.sell { background: var(--sell); color: #ffffff; }
+
+    .alert-sym {
+      font-weight: 800;
+      font-family: var(--font-mono);
+      color: #ffffff;
+      font-size: 13px;
+    }
+
+    .alert-time {
+      font-size: 11px;
+      color: var(--text-dim);
+    }
+
+    .alert-subtext {
+      font-size: 11px;
+      color: var(--text-muted);
+      font-family: var(--font-mono);
+      margin-top: 2px;
+    }
+
+    .alert-price {
+      font-size: 14px;
+      font-weight: 800;
+      font-family: var(--font-mono);
+      color: #ffffff;
+      text-align: right;
+    }
+
+    /* Data Table */
+    .history-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 11px;
+    }
+
+    .history-table th {
+      position: sticky;
+      top: 0;
+      background: #0d131f;
+      color: var(--text-muted);
+      padding: 8px 10px;
+      text-align: right;
+      border-bottom: 1px solid var(--border);
+      font-weight: 700;
+    }
+
+    .history-table th:first-child { text-align: left; }
+
+    .history-table td {
+      padding: 7px 10px;
+      text-align: right;
+      border-bottom: 1px solid #141c2c;
+      font-family: var(--font-mono);
+    }
+
+    .history-table td:first-child { text-align: left; color: var(--text-muted); }
+
+    .history-table tr:hover { background: var(--bg-hover); }
+
+    /* Debug Log */
+    .log-container {
+      background: #060910;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      padding: 8px;
+    }
+
+    .log-item {
+      padding: 6px 8px;
+      border-bottom: 1px solid #141d2b;
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+    }
+
+    .log-head {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .log-badge {
+      background: #1e293b;
+      color: #38bdf8;
+      padding: 1px 5px;
+      border-radius: 3px;
+      font-size: 10px;
+      font-weight: 700;
+    }
+
+    .log-json {
+      color: #94a3b8;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+
+    /* Footer */
+    .app-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: var(--bg-card);
+      border-top: 1px solid var(--border);
+      padding: 6px 20px;
+      font-size: 11px;
+      color: var(--text-dim);
+      flex-shrink: 0;
+    }
+
+    .app-footer strong { color: var(--text-muted); }
+    .app-footer code {
+      background: #090d14;
+      padding: 2px 6px;
+      border-radius: 3px;
+      color: var(--accent);
+      font-family: var(--font-mono);
+    }
+  </style>
 </head>
 <body>
-  <div class="terminal-container">
-    <!-- Top Bar -->
-    <header class="top-bar">
-      <div class="brand">
-        <div class="brand-logo">▲▼</div>
-        <div class="brand-text">
-          <h1>TRADING TRENDS TERMINAL</h1>
-          <span class="subtitle">CS-E4780 Scalable Systems • Intraday Breakout Strategy (EMA 38/100)</span>
+  <!-- Top Navigation Header -->
+  <header class="navbar">
+    <div class="brand">
+      <div class="brand-icon">📈</div>
+      <div>
+        <h1>Trading Trends Monitor</h1>
+        <span>CS-E4780 Scalable Systems • Tumbling Windows (EMA 38/100)</span>
+      </div>
+    </div>
+
+    <div class="nav-center">
+      <select id="symbol-select" class="select-symbol">
+        <option value="RDSA.NL">RDSA.NL (Amsterdam)</option>
+        <option value="AIR.FR">AIR.FR (Paris)</option>
+        <option value="BMW.ETR">BMW.ETR (Frankfurt)</option>
+        <option value="MC.FR">MC.FR (Paris)</option>
+        <option value="ASML.NL">ASML.NL (Amsterdam)</option>
+        <option value="SAN.FR">SAN.FR (Paris)</option>
+      </select>
+
+      <div class="symbol-pills" id="symbol-pills">
+        <!-- Dynamically generated pills -->
+      </div>
+    </div>
+
+    <div class="nav-right">
+      <div id="status-badge" class="status-badge connecting">
+        <span class="status-dot"></span>
+        <span id="status-text">Connecting...</span>
+      </div>
+      <button id="btn-sound" class="btn" title="Toggle audio chime">🔔 Sound: ON</button>
+      <button id="btn-reconnect" class="btn" title="Reconnect WebSocket">🔄 Reconnect</button>
+    </div>
+  </header>
+
+  <!-- Key Metrics KPI Banner -->
+  <section class="kpi-row">
+    <!-- Card 1: Last Close Price -->
+    <div class="kpi-card card-price">
+      <div class="kpi-title">
+        <span>LAST WINDOW CLOSE</span>
+        <span id="kpi-exchange" class="kpi-tag">Amsterdam (NL)</span>
+      </div>
+      <div class="kpi-value-box">
+        <span id="kpi-price" class="kpi-num">€19.852</span>
+      </div>
+      <div class="kpi-footer" id="kpi-window-time">Window: 09:05:00 CEST (w_108)</div>
+    </div>
+
+    <!-- Card 2: EMA 38 -->
+    <div class="kpi-card card-ema38">
+      <div class="kpi-title">
+        <span style="color:var(--ema38)">EMA 38 (FAST TREND)</span>
+        <span class="kpi-tag">j = 38</span>
+      </div>
+      <div class="kpi-value-box">
+        <span id="kpi-ema38" class="kpi-num" style="color:var(--ema38)">€19.824</span>
+      </div>
+      <div class="kpi-footer">Smoothing factor: 2 / (1 + 38) = 0.0513</div>
+    </div>
+
+    <!-- Card 3: EMA 100 -->
+    <div class="kpi-card card-ema100">
+      <div class="kpi-title">
+        <span style="color:var(--ema100)">EMA 100 (SLOW TREND)</span>
+        <span class="kpi-tag">j = 100</span>
+      </div>
+      <div class="kpi-value-box">
+        <span id="kpi-ema100" class="kpi-num" style="color:var(--ema100)">€19.780</span>
+      </div>
+      <div class="kpi-footer">Smoothing factor: 2 / (1 + 100) = 0.0198</div>
+    </div>
+
+    <!-- Card 4: Signal & Spread -->
+    <div class="kpi-card card-signal">
+      <div class="kpi-title">
+        <span>BREAKOUT ADVISORY (QUERY 2)</span>
+        <span id="kpi-signal-badge" class="kpi-tag buy">BULLISH BUY</span>
+      </div>
+      <div class="kpi-value-box">
+        <span id="kpi-spread" class="kpi-num">+0.044</span>
+        <span style="font-size:11px;color:var(--text-muted)">Spread (Δ)</span>
+      </div>
+      <div class="kpi-footer" id="kpi-signal-desc">EMA38 crossed above EMA100 (Golden Cross)</div>
+    </div>
+
+    <!-- Card 5: Telemetry Counters -->
+    <div class="kpi-card card-telemetry">
+      <div class="kpi-title">
+        <span>STREAM TELEMETRY</span>
+        <span class="kpi-tag">5m Windows</span>
+      </div>
+      <div class="kpi-telemetry-grid">
+        <div><span>Windows:</span> <strong id="tel-windows">142</strong></div>
+        <div><span>Symbols:</span> <strong id="tel-symbols">6</strong></div>
+        <div><span>Buy Alerts:</span> <strong id="tel-buys" style="color:var(--buy)">3</strong></div>
+        <div><span>Sell Alerts:</span> <strong id="tel-sells" style="color:var(--sell)">1</strong></div>
+      </div>
+      <div class="kpi-footer" id="tel-rate">Processing live tumbling windows</div>
+    </div>
+  </section>
+
+  <!-- Main Split Workspace -->
+  <main class="workspace">
+    <!-- Left: Chart Panel -->
+    <section class="panel">
+      <div class="panel-header">
+        <h2 id="chart-heading">RDSA.NL — 5-Minute Tumbling Windows</h2>
+        <div class="chart-controls">
+          <label class="chart-control-label">
+            <input type="checkbox" id="chk-ema38" checked>
+            <span class="legend-dot dot-ema38"></span> EMA 38
+          </label>
+          <label class="chart-control-label">
+            <input type="checkbox" id="chk-ema100" checked>
+            <span class="legend-dot dot-ema100"></span> EMA 100
+          </label>
+          <label class="chart-control-label">
+            <input type="checkbox" id="chk-markers" checked>
+            <span>🎯 Crossover Markers</span>
+          </label>
+          <button id="btn-fit" class="btn" style="padding:2px 8px;font-size:11px">Fit Scale</button>
         </div>
       </div>
 
-      <div class="telemetry">
-        <div class="stat-pill">
-          <span class="stat-label">STATUS</span>
-          <span id="connection-status" class="status-badge connecting">Connecting...</span>
+      <div class="chart-stage" id="chart-stage">
+        <canvas id="chart-canvas"></canvas>
+      </div>
+
+      <div class="chart-footer">
+        <div>
+          <strong>Crossover Strategy:</strong>
+          <span style="color:var(--buy)">🟢 Buy Advisory</span> when EMA38 crosses above EMA100 &nbsp;|&nbsp;
+          <span style="color:var(--sell)">🔴 Sell Advisory</span> when EMA38 crosses below EMA100
         </div>
-        <div class="stat-pill">
-          <span class="stat-label">TOTAL WINDOWS</span>
-          <span id="total-windows" class="stat-val">0</span>
+        <div id="chart-cursor-info">Hover over chart to inspect window values</div>
+      </div>
+    </section>
+
+    <!-- Right: Tabbed Inspector Panel -->
+    <section class="panel">
+      <div class="tabs-bar">
+        <button class="tab-item active" data-tab="tab-alerts">
+          🚨 Breakout Alerts (<span id="alert-count-pill">0</span>)
+        </button>
+        <button class="tab-item" data-tab="tab-history">
+          📊 Window History
+        </button>
+        <button class="tab-item" data-tab="tab-debugger">
+          🔍 Message Log
+        </button>
+      </div>
+
+      <!-- Tab 1: Breakout Advisories Feed -->
+      <div id="tab-alerts" class="tab-view active">
+        <div class="tab-toolbar">
+          <span>Query 2 Crossover Advisories</span>
+          <div class="pill-filter-group">
+            <button class="pill-filter active" data-filter="all">All</button>
+            <button class="pill-filter" data-filter="BUY">Buys</button>
+            <button class="pill-filter" data-filter="SELL">Sells</button>
+          </div>
         </div>
-        <div class="stat-pill">
-          <span class="stat-label">SYMBOLS</span>
-          <span id="active-symbols-count" class="stat-val">0</span>
-        </div>
-        <div class="stat-pill alert-pill-buy">
-          <span class="stat-label">BUY ADVISORIES</span>
-          <span id="total-buy-alerts" class="stat-val green">0</span>
-        </div>
-        <div class="stat-pill alert-pill-sell">
-          <span class="stat-label">SELL ADVISORIES</span>
-          <span id="total-sell-alerts" class="stat-val red">0</span>
+        <div class="scroll-body" id="alerts-scroll-body">
+          <!-- Live alert cards -->
         </div>
       </div>
 
-      <div class="header-actions">
-        <button id="btn-sound" class="btn-icon active" title="Toggle Alert Chime">🔔 Sound: ON</button>
-        <button id="btn-reconnect" class="btn-sm" title="Reconnect WebSocket">🔄 Reconnect</button>
-      </div>
-    </header>
-
-    <!-- Symbols Watchlist Bar -->
-    <nav class="symbols-bar">
-      <div class="symbol-search-box">
-        <input type="text" id="symbol-search" placeholder="Search symbol (e.g. RDSA.NL, AIR.FR)..." />
-      </div>
-      <div id="quick-symbols" class="quick-symbols-list">
-        <!-- Dynamically populated symbol pills -->
-      </div>
-    </nav>
-
-    <!-- Main Workspace -->
-    <main class="workspace-grid">
-      <!-- Chart Panel -->
-      <section class="chart-panel card">
-        <div class="card-header">
-          <div class="symbol-quote">
-            <span id="chart-symbol" class="quote-symbol">RDSA.NL</span>
-            <span id="chart-exchange" class="badge-exchange">Amsterdam (NL)</span>
-            <span id="chart-price" class="quote-price">--.--</span>
-            <span id="chart-signal-badge" class="quote-signal neutral">WAITING DATA</span>
-          </div>
-
-          <div class="indicator-legend">
-            <span class="legend-item ema38"><span class="dot ema38-dot"></span> EMA(38): <strong id="val-ema38">--.--</strong></span>
-            <span class="legend-item ema100"><span class="dot ema100-dot"></span> EMA(100): <strong id="val-ema100">--.--</strong></span>
-            <span class="legend-item spread">Spread: <strong id="val-spread">--.--</strong></span>
-          </div>
+      <!-- Tab 2: Window History Table -->
+      <div id="tab-history" class="tab-view">
+        <div class="tab-toolbar">
+          <span>Recent windows for <strong id="tab-hist-sym" style="color:#ffffff">RDSA.NL</strong></span>
         </div>
-
-        <!-- Chart Container -->
-        <div id="chart-container" class="chart-viewport">
-          <canvas id="fallback-canvas"></canvas>
+        <div class="scroll-body" style="padding:0">
+          <table class="history-table">
+            <thead>
+              <tr>
+                <th>Time (CEST)</th>
+                <th>Close (€)</th>
+                <th>EMA 38</th>
+                <th>EMA 100</th>
+                <th>Signal</th>
+              </tr>
+            </thead>
+            <tbody id="history-tbody">
+              <!-- Window rows -->
+            </tbody>
+          </table>
         </div>
+      </div>
 
-        <div class="chart-footer">
-          <div class="chart-info">
-            <span>5-minute tumbling windows (CEST event time)</span>
-            <span id="window-timestamp">Last Window: --:--:--</span>
-          </div>
-          <div class="chart-controls">
-            <label><input type="checkbox" id="toggle-ema38" checked> EMA 38</label>
-            <label><input type="checkbox" id="toggle-ema100" checked> EMA 100</label>
-            <label><input type="checkbox" id="toggle-markers" checked> Breakout Markers</label>
-          </div>
+      <!-- Tab 3: Message Log / JSON Debugger -->
+      <div id="tab-debugger" class="tab-view">
+        <div class="tab-toolbar">
+          <span>Incoming WebSocket Frames</span>
+          <button id="btn-clear-debug" class="btn" style="padding:2px 8px;font-size:10px">Clear Log</button>
         </div>
-      </section>
-
-      <!-- Sidebar: Alerts & Market Overview -->
-      <aside class="sidebar-panels">
-        <!-- Live Breakout Alerts Feed -->
-        <section class="card alert-feed-panel">
-          <div class="card-header">
-            <h2>⚡ Breakout Advisories (Query 2)</h2>
-            <div class="filter-pills">
-              <button class="filter-pill active" data-filter="all">All</button>
-              <button class="filter-pill" data-filter="BUY">Buys</button>
-              <button class="filter-pill" data-filter="SELL">Sells</button>
-            </div>
-          </div>
-          <div id="alerts-list" class="alerts-feed-content">
-            <div class="empty-state">Awaiting breakout events from stream analyzer...</div>
-          </div>
-        </section>
-
-        <!-- Market Overview Table -->
-        <section class="card market-table-panel">
-          <div class="card-header">
-            <h2>📊 Market Overview</h2>
-            <span class="badge-sub">All Tracked Symbols</span>
-          </div>
-          <div class="table-scroll">
-            <table class="market-table">
-              <thead>
-                <tr>
-                  <th>Symbol</th>
-                  <th>Last</th>
-                  <th>EMA 38</th>
-                  <th>EMA 100</th>
-                  <th>Trend</th>
-                </tr>
-              </thead>
-              <tbody id="market-table-body">
-                <tr><td colspan="5" class="empty-cell">Waiting for ticks...</td></tr>
-              </tbody>
-            </table>
-          </div>
-        </section>
-      </aside>
-    </main>
-
-    <!-- Bottom Status / Diagnostics Footer -->
-    <footer class="bottom-bar">
-      <div class="pipeline-flow">
-        <span>Pipeline: <strong>Redpanda Broker</strong> ➔ <strong>Stream Analyzer</strong> (5m Tumbling Windows) ➔ <strong>Go Gateway</strong> (/ws) ➔ <strong>TradingView Terminal</strong></span>
+        <div class="scroll-body log-container" id="debug-scroll-body">
+          <!-- Raw message frames -->
+        </div>
       </div>
-      <div class="gateway-config">
-        <span>Gateway WS:</span>
-        <input type="text" id="ws-url-input" value="" />
-        <button id="btn-apply-ws" class="btn-xs">Connect</button>
-      </div>
-    </footer>
-  </div>
+    </section>
+  </main>
+
+  <!-- Bottom Bar -->
+  <footer class="app-footer">
+    <div>
+      <span>Gateway: <code id="footer-endpoint">ws://localhost:8081/ws</code></span>
+    </div>
+    <div>
+      <span>Architecture: <strong>Redpanda Broker</strong> ➔ <strong>Stream Analyzer</strong> (5m Tumbling Windows) ➔ <strong>Web Gateway</strong> ➔ <strong>Trader Terminal</strong></span>
+    </div>
+    <div>
+      <span>Course: <strong>CS-E4780 Scalable Systems</strong></span>
+    </div>
+  </footer>
 
   <script src="app.js"></script>
 </body>
