@@ -81,7 +81,36 @@ see scripts/readme.md
 
 ## 4. Message Schemas & Contracts
 
-Define later
+All inter-service message schemas are centrally defined in [`pkg/models/tick.go`](file:///home/noora/school/scaddis/Course-Project-Detecting-Trading-Trends-in-Financial-Tick-Data/pkg/models/tick.go).
+
+### Market Ticks (`market-ticks` Topic)
+- **Partition Key:** `ID` (e.g. `RDSA.NL`). Ensures all ticks for a given symbol are delivered in strict FIFO order to the same partition.
+- **Payload Schema:**
+  ```json
+  {
+    "id": "RDSA.NL",
+    "sec_type": "E",
+    "timestamp": "2021-11-08T09:00:00.123Z",
+    "price": 18.45,
+    "trading_date": "08-11-2021",
+    "trading_time": "09:00:00.123"
+  }
+  ```
+
+### Data Producer Replay Modes
+
+The Data Producer supports streaming directly from `.csv.gz` and `.csv` files:
+
+```bash
+# Benchmark Mode (max throughput)
+go run ./producer -input data/trades_cleaned.csv.gz -brokers localhost:19092
+
+# Fixed Rate Mode (e.g. 5,000 events/second)
+go run ./producer -input data/trades_cleaned.csv.gz -mode rate -rate 5000
+
+# Simulated Real-Time Mode (e.g. 10x accelerated historical replay)
+go run ./producer -input data/trades_cleaned.csv.gz -mode realtime -speed 10.0
+```
 
 ---
 
