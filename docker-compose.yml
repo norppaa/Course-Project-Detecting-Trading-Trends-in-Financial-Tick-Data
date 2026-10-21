@@ -93,7 +93,11 @@ services:
     container_name: tick-producer
     environment:
       - KAFKA_BROKERS=redpanda:9092
-      - INPUT_FILE=/data/trades_cleaned.csv
+      - INPUT_FILE=/data/trades_cleaned.csv.gz
+      - REPLAY_MODE=max       # Options: "max" (fastest benchmark), "rate", or "realtime"
+      - RATE_LIMIT=10000      # Events/sec (used if REPLAY_MODE=rate)
+      - SPEED_FACTOR=10.0     # Multiplier (used if REPLAY_MODE=realtime, e.g. 10x speed)
+      - ONLY_TRADES=true      # Filter to events with non-empty Last price
     volumes:
       - ./data:/data:ro
     networks:
