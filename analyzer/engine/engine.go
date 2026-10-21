@@ -83,6 +83,8 @@ type WindowResult struct {
 	HasTick     bool // false if Close was carried forward (CarryLastClose)
 	EMA38       float64
 	EMA100      float64
+	PrevEMA38   float64 // EMAs of the symbol's previous evaluated window
+	PrevEMA100  float64 // (0 before the first window), used by Query 2
 	Signal      Signal
 }
 
@@ -344,6 +346,8 @@ func (e *Engine) evaluate(st *symbolState, idx int64, close float64, hasTick boo
 		HasTick:     hasTick,
 		EMA38:       st.ema38,
 		EMA100:      st.ema100,
+		PrevEMA38:   prev38,
+		PrevEMA100:  prev100,
 		Signal:      sig,
 	})
 }

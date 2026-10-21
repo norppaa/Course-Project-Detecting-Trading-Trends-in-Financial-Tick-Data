@@ -25,7 +25,6 @@ import (
 	"strings"
 	"time"
 
-	// Replace with your module path from go.mod.
 	"trading-trends/analyzer/engine"
 )
 
