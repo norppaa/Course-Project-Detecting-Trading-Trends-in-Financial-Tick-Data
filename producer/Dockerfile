@@ -10,8 +10,10 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o /app/bin/producer ./producer
 
 # Minimal runtime image
-FROM alpine:latest
+FROM alpine:3.22
 WORKDIR /app
 COPY --from=builder /app/bin/producer .
+RUN adduser -D -H producer
+USER producer
 
 CMD ["./producer"]

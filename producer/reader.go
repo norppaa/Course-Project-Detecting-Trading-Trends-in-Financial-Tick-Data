@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"compress/gzip"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -23,7 +24,8 @@ type TickReader struct {
 	parsedTicks int64
 }
 
-// NewTickReader creates a new TickReader from a file path (.csv or .csv.gz).
+// NewTickReader creates a new TickReader from a file path. Gzip input is
+// detected from the file's magic bytes, so the extension does not matter.
 func NewTickReader(filePath string, onlyTrades bool) (*TickReader, error) {
 	file, err := os.Open(filePath)
 	if err != nil {
@@ -33,34 +35,20 @@ func NewTickReader(filePath string, onlyTrades bool) (*TickReader, error) {
 	var reader io.Reader = file
 	var gzReader *gzip.Reader
 
-	// Check if file is gzip: check .gz suffix or inspect magic bytes
-	if strings.HasSuffix(strings.ToLower(filePath), ".gz") {
+	magic := make([]byte, 2)
+	if n, _ := file.ReadAt(magic, 0); n == 2 && magic[0] == 0x1f && magic[1] == 0x8b {
 		gzReader, err = gzip.NewReader(file)
 		if err != nil {
 			file.Close()
 			return nil, fmt.Errorf("failed to create gzip reader for %q: %w", filePath, err)
 		}
 		reader = gzReader
-	} else {
-		// Also inspect the first two magic bytes for gzip in case extension is missing
-		magic := make([]byte, 2)
-		n, _ := file.ReadAt(magic, 0)
-		if n == 2 && magic[0] == 0x1f && magic[1] == 0x8b {
-			gzReader, err = gzip.NewReader(file)
-			if err != nil {
-				file.Close()
-				return nil, fmt.Errorf("failed to create gzip reader: %w", err)
-			}
-			reader = gzReader
-		}
 	}
-
-	bufReader := bufio.NewReaderSize(reader, 1024*1024) // 1MB buffer for high throughput
 
 	return &TickReader{
 		file:       file,
 		gzReader:   gzReader,
-		bufReader:  bufReader,
+		bufReader:  bufio.NewReaderSize(reader, 1024*1024), // 1MB buffer for high throughput
 		onlyTrades: onlyTrades,
 	}, nil
 }
@@ -75,21 +63,14 @@ func NewTickReaderFromReader(r io.Reader, onlyTrades bool) *TickReader {
 
 // Close releases the file and gzip resources.
 func (r *TickReader) Close() error {
-	var errs []string
+	var errs []error
 	if r.gzReader != nil {
-		if err := r.gzReader.Close(); err != nil {
-			errs = append(errs, err.Error())
-		}
+		errs = append(errs, r.gzReader.Close())
 	}
 	if r.file != nil {
-		if err := r.file.Close(); err != nil {
-			errs = append(errs, err.Error())
-		}
+		errs = append(errs, r.file.Close())
 	}
-	if len(errs) > 0 {
-		return fmt.Errorf("errors closing reader: %s", strings.Join(errs, "; "))
-	}
-	return nil
+	return errors.Join(errs...)
 }
 
 // Stats returns the number of total lines read and valid ticks produced.
@@ -101,75 +82,67 @@ func (r *TickReader) Stats() (totalLines, parsedTicks int64) {
 func (r *TickReader) Next() (*models.MarketTick, error) {
 	for {
 		line, err := r.bufReader.ReadString('\n')
-		if len(line) > 0 {
+		if line != "" {
 			r.totalLines++
-			line = strings.TrimRight(line, "\r\n")
-
-			// Skip empty lines, comments, and headers
-			if len(line) == 0 || line[0] == '#' || strings.HasPrefix(line, "ID,SecType") {
-				if err != nil {
-					if err == io.EOF {
-						return nil, io.EOF
-					}
-					return nil, err
-				}
-				continue
-			}
-
-			tick, ok := r.parseLine(line)
-			if ok {
+			if tick, ok := r.parseLine(strings.TrimRight(line, "\r\n")); ok {
 				r.parsedTicks++
 				return tick, nil
 			}
 		}
-
 		if err != nil {
-			if err == io.EOF {
-				return nil, io.EOF
-			}
 			return nil, err
 		}
 	}
 }
 
-// parseLine extracts fields from a single CSV line.
+// parseLine extracts a tick from a single CSV line. Empty lines, comments,
+// headers and (with onlyTrades) non-trade or malformed rows are rejected.
 func (r *TickReader) parseLine(line string) (*models.MarketTick, bool) {
-	cols := strings.Split(line, ",")
-
-	var id, secType, date, timeVal, lastPrice, tradingTime, tradingDate string
-
-	if len(cols) >= 27 {
-		// Raw DEBS 2022 dataset format
-		id = cols[0]
-		secType = cols[1]
-		date = cols[2]
-		timeVal = cols[3]
-		lastPrice = cols[21]
-		tradingTime = cols[23]
-		tradingDate = cols[26]
-	} else if len(cols) >= 5 {
-		// Cleaned dataset format: ID,SecType,Date,Time,Last[,TradingTime,TradingDate]
-		id = cols[0]
-		secType = cols[1]
-		date = cols[2]
-		timeVal = cols[3]
-		lastPrice = cols[4]
-		if len(cols) >= 6 {
-			tradingTime = cols[5]
-		}
-		if len(cols) >= 7 {
-			tradingDate = cols[6]
-		}
-	} else {
+	if line == "" || line[0] == '#' || strings.HasPrefix(line, "ID,SecType") {
 		return nil, false
 	}
 
-	// Basic validation: ID must not be empty
+	cols := strings.Split(line, ",")
+	col := func(i int) string {
+		if i < len(cols) {
+			return cols[i]
+		}
+		return ""
+	}
+
+	// Column indexes of Last, Trading time and Trading date
+	var lastIdx, tradingTimeIdx, tradingDateIdx int
+	switch {
+	case len(cols) >= 27: // Raw DEBS 2022 dataset format
+		lastIdx, tradingTimeIdx, tradingDateIdx = 21, 23, 26
+	case len(cols) >= 5: // Cleaned dataset format: ID,SecType,Date,Time,Last[,TradingTime,TradingDate]
+		lastIdx, tradingTimeIdx, tradingDateIdx = 4, 5, 6
+	default:
+		return nil, false
+	}
+
+	id, secType, date, timeVal := cols[0], cols[1], cols[2], cols[3]
 	if id == "" {
 		return nil, false
 	}
 
-	// Fallback to system Date and Time if trade-specific timestamps are blank
+	// Most rows are quotes with an empty Last; skip them before ParseFloat,
+	// which allocates an error for empty input.
+	lastPrice := col(lastIdx)
+	if r.onlyTrades && lastPrice == "" {
+		return nil, false
+	}
+	price, err := strconv.ParseFloat(lastPrice, 64)
+	if err != nil {
+		price = 0
+	}
+	// If onlyTrades is enabled, discard events without a valid trade price
+	if r.onlyTrades && price <= 0 {
+		return nil, false
+	}
+
+	// Fall back to system Date and Time if trade-specific timestamps are blank
+	tradingTime, tradingDate := col(tradingTimeIdx), col(tradingDateIdx)
 	if tradingDate == "" {
 		tradingDate = date
 	}
@@ -177,35 +150,12 @@ func (r *TickReader) parseLine(line string) (*models.MarketTick, bool) {
 		tradingTime = timeVal
 	}
 
-	// If onlyTrades is enabled, discard events without a trade price
-	if r.onlyTrades && (lastPrice == "" || lastPrice == "0" || lastPrice == "0.000000") {
-		return nil, false
-	}
-
-	var price float64
-	if lastPrice != "" {
-		p, err := strconv.ParseFloat(lastPrice, 64)
-		if err != nil {
-			if r.onlyTrades {
-				return nil, false
-			}
-		} else {
-			price = p
-		}
-	}
-
-	// Fast timestamp parsing
 	ts, err := parseTimestamp(tradingDate, tradingTime)
 	if err != nil {
-		// Try date and timeVal as fallback
 		ts, err = parseTimestamp(date, timeVal)
-		if err != nil {
-			// If parsing still fails and onlyTrades is enabled, discard malformed row
-			if r.onlyTrades {
-				return nil, false
-			}
-			ts = time.Time{}
-		}
+	}
+	if err != nil && r.onlyTrades {
+		return nil, false
 	}
 
 	return &models.MarketTick{
@@ -220,61 +170,71 @@ func (r *TickReader) parseLine(line string) (*models.MarketTick, bool) {
 
 // parseTimestamp converts DD-MM-YYYY and HH:MM:SS.sss into a UTC time.Time efficiently.
 func parseTimestamp(dateStr, timeStr string) (time.Time, error) {
-	// Expected dateStr: "DD-MM-YYYY" (len 10)
-	// Expected timeStr: "HH:MM:SS" (len 8) or "HH:MM:SS.sss" (len 10-12)
-	if len(dateStr) == 10 && len(timeStr) >= 8 &&
-		dateStr[2] == '-' && dateStr[5] == '-' &&
-		timeStr[2] == ':' && timeStr[5] == ':' {
-
-		day := fastAtoi2(dateStr[0], dateStr[1])
-		month := fastAtoi2(dateStr[3], dateStr[4])
-		year := fastAtoi4(dateStr[6], dateStr[7], dateStr[8], dateStr[9])
-
-		hour := fastAtoi2(timeStr[0], timeStr[1])
-		min := fastAtoi2(timeStr[3], timeStr[4])
-		sec := fastAtoi2(timeStr[6], timeStr[7])
-
-		nsec := 0
-		if len(timeStr) > 8 && timeStr[8] == '.' {
-			fracStr := timeStr[9:]
-			var multiplier = 100000000 // 10^8
-			for i := 0; i < len(fracStr) && i < 9; i++ {
-				c := fracStr[i]
-				if c >= '0' && c <= '9' {
-					nsec += int(c-'0') * multiplier
-					multiplier /= 10
-				} else {
-					break
-				}
-			}
-		}
-
-		if day >= 1 && day <= 31 && month >= 1 && month <= 12 &&
-			hour >= 0 && hour <= 23 && min >= 0 && min <= 59 && sec >= 0 && sec <= 60 {
-			return time.Date(year, time.Month(month), day, hour, min, sec, nsec, time.UTC), nil
-		}
+	if t, ok := parseTimestampFast(dateStr, timeStr); ok {
+		return t, nil
 	}
 
-	// Fallback to standard library parser if format deviates
+	// Fallback to standard library parser if format deviates.
+	// Fractional seconds are accepted even though the layouts omit them.
 	combined := dateStr + " " + timeStr
-	layouts := []string{
-		"02-01-2006 15:04:05.999999999",
-		"02-01-2006 15:04:05",
-		"2006-01-02 15:04:05",
-	}
-	for _, layout := range layouts {
+	for _, layout := range []string{"02-01-2006 15:04:05", "2006-01-02 15:04:05"} {
 		if t, err := time.ParseInLocation(layout, combined, time.UTC); err == nil {
 			return t, nil
 		}
 	}
-
 	return time.Time{}, fmt.Errorf("unable to parse timestamp %q %q", dateStr, timeStr)
 }
 
-func fastAtoi2(c0, c1 byte) int {
-	return int(c0-'0')*10 + int(c1-'0')
+// parseTimestampFast handles the expected "DD-MM-YYYY" and "HH:MM:SS[.fraction]"
+// format without allocating.
+func parseTimestampFast(dateStr, timeStr string) (time.Time, bool) {
+	if len(dateStr) != 10 || len(timeStr) < 8 ||
+		dateStr[2] != '-' || dateStr[5] != '-' || timeStr[2] != ':' || timeStr[5] != ':' {
+		return time.Time{}, false
+	}
+
+	day, ok1 := atoi(dateStr[0:2])
+	month, ok2 := atoi(dateStr[3:5])
+	year, ok3 := atoi(dateStr[6:10])
+	hour, ok4 := atoi(timeStr[0:2])
+	minute, ok5 := atoi(timeStr[3:5])
+	sec, ok6 := atoi(timeStr[6:8])
+	if !(ok1 && ok2 && ok3 && ok4 && ok5 && ok6) || hour > 23 || minute > 59 || sec > 59 {
+		return time.Time{}, false
+	}
+
+	nsec := 0
+	if len(timeStr) > 8 {
+		if timeStr[8] != '.' {
+			return time.Time{}, false
+		}
+		multiplier := 100000000 // 10^8
+		for i := 9; i < len(timeStr) && i < 18; i++ {
+			c := timeStr[i]
+			if c < '0' || c > '9' {
+				return time.Time{}, false
+			}
+			nsec += int(c-'0') * multiplier
+			multiplier /= 10
+		}
+	}
+
+	t := time.Date(year, time.Month(month), day, hour, minute, sec, nsec, time.UTC)
+	// time.Date normalizes invalid dates (e.g. 31-02 -> 03-03); reject those
+	if t.Day() != day || t.Month() != time.Month(month) {
+		return time.Time{}, false
+	}
+	return t, true
 }
 
-func fastAtoi4(c0, c1, c2, c3 byte) int {
-	return int(c0-'0')*1000 + int(c1-'0')*100 + int(c2-'0')*10 + int(c3-'0')
+// atoi parses a short string of ASCII digits.
+func atoi(s string) (int, bool) {
+	n := 0
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return 0, false
+		}
+		n = n*10 + int(s[i]-'0')
+	}
+	return n, len(s) > 0
 }

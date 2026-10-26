@@ -11,7 +11,36 @@ import (
 // Pacer controls the rate at which ticks are dispatched to the message broker.
 type Pacer interface {
 	Wait(ctx context.Context, tick *models.MarketTick) error
-	Close() error
+}
+
+// newPacer builds the pacer for the configured replay mode.
+func newPacer(cfg *Config) (Pacer, error) {
+	switch cfg.ReplayMode {
+	case "rate":
+		return NewFixedRatePacer(cfg.Rate)
+	case "realtime":
+		return NewSimulatedRealtimePacer(cfg.Speed, 1*time.Second)
+	default:
+		return NewMaxSpeedPacer(), nil
+	}
+}
+
+// sleepUntil blocks until the wall-clock deadline or until ctx is cancelled.
+// Waits shorter than a millisecond are skipped; because pacers schedule against
+// a fixed start time, skipped time is made up on later ticks rather than lost.
+func sleepUntil(ctx context.Context, deadline time.Time) error {
+	d := time.Until(deadline)
+	if d < time.Millisecond {
+		return ctx.Err()
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 // MaxSpeedPacer emits events as fast as possible without throttling.
@@ -22,24 +51,15 @@ func NewMaxSpeedPacer() *MaxSpeedPacer {
 }
 
 func (p *MaxSpeedPacer) Wait(ctx context.Context, _ *models.MarketTick) error {
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-		return nil
-	}
-}
-
-func (p *MaxSpeedPacer) Close() error {
-	return nil
+	return ctx.Err()
 }
 
 // FixedRatePacer throttles output to a target number of events per second.
 type FixedRatePacer struct {
-	targetRate int       // messages per second
-	batchCheck int64     // check interval (e.g. every 100 messages)
+	targetRate int64     // messages per second
+	checkEvery int64     // only check the clock every N messages (~every 10ms)
 	sentCount  int64     // total messages paced
-	startTime  time.Time // reference start time
+	startTime  time.Time // set on the first Wait
 }
 
 // NewFixedRatePacer creates a pacer targeting `rate` messages per second.
@@ -47,54 +67,32 @@ func NewFixedRatePacer(rate int) (*FixedRatePacer, error) {
 	if rate <= 0 {
 		return nil, fmt.Errorf("rate must be positive, got %d", rate)
 	}
-
-	batch := int64(100)
-	if rate < 100 {
-		batch = 1
-	} else if rate > 50000 {
-		batch = 500
-	}
-
 	return &FixedRatePacer{
-		targetRate: rate,
-		batchCheck: batch,
-		startTime:  time.Now(),
+		targetRate: int64(rate),
+		checkEvery: max(1, int64(rate)/100),
 	}, nil
 }
 
 func (p *FixedRatePacer) Wait(ctx context.Context, _ *models.MarketTick) error {
+	if p.startTime.IsZero() {
+		p.startTime = time.Now()
+	}
 	p.sentCount++
-	if p.sentCount%p.batchCheck != 0 {
-		return nil
+	if p.sentCount%p.checkEvery != 0 {
+		return ctx.Err()
 	}
-
-	// Calculate where we should be in time
-	expectedDuration := time.Duration(p.sentCount) * time.Second / time.Duration(p.targetRate)
-	actualDuration := time.Since(p.startTime)
-
-	if actualDuration < expectedDuration {
-		sleepTime := expectedDuration - actualDuration
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(sleepTime):
-		}
-	}
-
-	return nil
-}
-
-func (p *FixedRatePacer) Close() error {
-	return nil
+	expected := time.Duration(p.sentCount) * time.Second / time.Duration(p.targetRate)
+	return sleepUntil(ctx, p.startTime.Add(expected))
 }
 
 // SimulatedRealtimePacer replays events according to their historical timestamp deltas,
 // scaled by a speedup factor (e.g. 10x, 100x).
 type SimulatedRealtimePacer struct {
 	speedMultiplier float64
-	maxWaitGap      time.Duration
-	lastEventTime   time.Time
-	lastWallTime    time.Time
+	maxWaitGap      time.Duration // cap on the wall-clock wait between two events
+	wallStart       time.Time     // wall time of the first event
+	wallOffset      time.Duration // scheduled wall time of lastEvent, relative to wallStart
+	lastEvent       time.Time
 }
 
 // NewSimulatedRealtimePacer creates a pacer that scales historical timestamps by speedMultiplier.
@@ -106,7 +104,6 @@ func NewSimulatedRealtimePacer(speedMultiplier float64, maxWaitGap time.Duration
 	if maxWaitGap <= 0 {
 		maxWaitGap = 1 * time.Second
 	}
-
 	return &SimulatedRealtimePacer{
 		speedMultiplier: speedMultiplier,
 		maxWaitGap:      maxWaitGap,
@@ -115,43 +112,20 @@ func NewSimulatedRealtimePacer(speedMultiplier float64, maxWaitGap time.Duration
 
 func (p *SimulatedRealtimePacer) Wait(ctx context.Context, tick *models.MarketTick) error {
 	if tick.Timestamp.IsZero() {
-		return nil
+		return ctx.Err()
+	}
+	if p.wallStart.IsZero() {
+		p.wallStart = time.Now()
+		p.lastEvent = tick.Timestamp
+		return ctx.Err()
+	}
+	// Out-of-order or same-time ticks are sent immediately
+	if !tick.Timestamp.After(p.lastEvent) {
+		return ctx.Err()
 	}
 
-	now := time.Now()
-	if p.lastEventTime.IsZero() {
-		p.lastEventTime = tick.Timestamp
-		p.lastWallTime = now
-		return nil
-	}
-
-	// Only sleep if this tick is strictly after the previous tick
-	if tick.Timestamp.After(p.lastEventTime) {
-		eventDelta := tick.Timestamp.Sub(p.lastEventTime)
-		wallDeltaNeeded := time.Duration(float64(eventDelta) / p.speedMultiplier)
-
-		if wallDeltaNeeded > p.maxWaitGap {
-			wallDeltaNeeded = p.maxWaitGap
-		}
-
-		expectedWallTime := p.lastWallTime.Add(wallDeltaNeeded)
-		sleepDuration := time.Until(expectedWallTime)
-
-		if sleepDuration > 500*time.Microsecond {
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(sleepDuration):
-			}
-		}
-
-		p.lastEventTime = tick.Timestamp
-		p.lastWallTime = time.Now()
-	}
-
-	return nil
-}
-
-func (p *SimulatedRealtimePacer) Close() error {
-	return nil
+	gap := time.Duration(float64(tick.Timestamp.Sub(p.lastEvent)) / p.speedMultiplier)
+	p.wallOffset += min(gap, p.maxWaitGap)
+	p.lastEvent = tick.Timestamp
+	return sleepUntil(ctx, p.wallStart.Add(p.wallOffset))
 }
