@@ -114,6 +114,11 @@ services:
     container_name: stream-analyzer
     environment:
       - KAFKA_BROKERS=redpanda:9092
+      - GROUP_ID=stream-analyzer     # use a new id to re-read the topic from the start
+      - GRACE=5s                     # allowed out-of-orderness of event time
+      - EMPTY_WINDOW_POLICY=skip     # skip | carry
+      - SUPPRESS_FIRST_SIGNAL=false  # hide the BUY each symbol gets in its first window
+      - IDLE_FLUSH=5s                # close all windows after this long without input
     networks:
       - redpanda-net
     depends_on:
