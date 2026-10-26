@@ -47,22 +47,25 @@ func NewKafkaPublisher(brokers []string, topic string, batchSize int, batchTimeo
 	return p
 }
 
-// Publish serializes a tick and hands it to the async Kafka writer.
-func (p *KafkaPublisher) Publish(ctx context.Context, tick *models.MarketTick) error {
-	payload, err := json.Marshal(tick)
-	if err != nil {
-		return fmt.Errorf("failed to marshal tick: %w", err)
+// Publish serializes ticks and hands them to the async Kafka writer in one call.
+func (p *KafkaPublisher) Publish(ctx context.Context, ticks ...*models.MarketTick) error {
+	msgs := make([]kafka.Message, len(ticks))
+	for i, tick := range ticks {
+		payload, err := json.Marshal(tick)
+		if err != nil {
+			return fmt.Errorf("failed to marshal tick: %w", err)
+		}
+		msgs[i] = kafka.Message{
+			Key:   []byte(tick.ID), // Symbol is the partition key
+			Value: payload,
+			Time:  tick.Timestamp,
+		}
 	}
 
-	err = p.writer.WriteMessages(ctx, kafka.Message{
-		Key:   []byte(tick.ID), // Symbol is the partition key
-		Value: payload,
-		Time:  tick.Timestamp,
-	})
-	if err != nil {
+	if err := p.writer.WriteMessages(ctx, msgs...); err != nil {
 		return err
 	}
-	p.queued.Add(1)
+	p.queued.Add(int64(len(msgs)))
 	return nil
 }
 

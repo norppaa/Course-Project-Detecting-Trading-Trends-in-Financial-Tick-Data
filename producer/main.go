@@ -91,6 +91,20 @@ func main() {
 
 	log.Println("[Producer] Streaming started...")
 
+	// In max mode ticks are handed to Kafka in chunks, which cuts per-call overhead.
+	// Paced modes send each tick immediately so it never waits behind a sleep.
+	chunkSize := 1
+	if cfg.ReplayMode == "max" {
+		chunkSize = cfg.BatchSize
+	}
+	pending := make([]*models.MarketTick, 0, chunkSize)
+	publishPending := func() {
+		if err := publisher.Publish(ctx, pending...); err != nil {
+			log.Printf("[Producer] Publish error: %v", err)
+		}
+		pending = pending[:0]
+	}
+
 	var processedTicks int64
 	for cfg.MaxTicks == 0 || processedTicks < cfg.MaxTicks {
 		tick, err := reader.Next()
@@ -108,13 +122,15 @@ func main() {
 			break
 		}
 
-		if err := publisher.Publish(ctx, tick); err != nil {
-			log.Printf("[Producer] Publish error: %v", err)
+		pending = append(pending, tick)
+		if len(pending) == chunkSize {
+			publishPending()
 		}
 
 		processedTicks++
 		latestTick.Store(tick)
 	}
+	publishPending()
 	if cfg.MaxTicks > 0 && processedTicks >= cfg.MaxTicks {
 		log.Printf("[Producer] Reached limit of %d ticks. Stopping.", cfg.MaxTicks)
 	}
