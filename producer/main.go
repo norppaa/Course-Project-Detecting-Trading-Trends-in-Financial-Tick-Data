@@ -2,16 +2,27 @@ package main
 
 import (
 	"context"
+	"errors"
+	"flag"
 	"io"
 	"log"
 	"os"
 	"os/signal"
+	"sync/atomic"
 	"syscall"
 	"time"
+
+	"trading-trends/pkg/models"
 )
 
 func main() {
-	cfg := LoadConfig()
+	cfg, err := LoadConfig(os.Args[1:])
+	if errors.Is(err, flag.ErrHelp) {
+		return
+	}
+	if err != nil {
+		log.Fatalf("[Producer] Invalid configuration: %v", err)
+	}
 
 	log.Println("==================================================")
 	log.Println("           FINANCIAL TICK DATA PRODUCER           ")
@@ -32,125 +43,90 @@ func main() {
 	}
 	log.Println("--------------------------------------------------")
 
-	// Context with graceful shutdown on SIGINT/SIGTERM
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	// Context cancelled on SIGINT/SIGTERM for graceful shutdown
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-	go func() {
-		sig := <-sigChan
-		log.Printf("\n[Producer] Received signal %v, gracefully shutting down...", sig)
-		cancel()
-	}()
+	pacer, err := newPacer(cfg)
+	if err != nil {
+		log.Fatalf("[Producer] Failed to initialize pacer: %v", err)
+	}
 
-	// 1. Initialize Reader
 	reader, err := NewTickReader(cfg.InputFile, cfg.OnlyTrades)
 	if err != nil {
 		log.Fatalf("[Producer] Failed to open input file: %v", err)
 	}
 	defer reader.Close()
 
-	// 2. Initialize Replayer / Pacer
-	var pacer Pacer
-	switch cfg.ReplayMode {
-	case "rate":
-		p, err := NewFixedRatePacer(cfg.Rate)
-		if err != nil {
-			log.Fatalf("[Producer] Failed to initialize rate pacer: %v", err)
-		}
-		pacer = p
-	case "realtime":
-		p, err := NewSimulatedRealtimePacer(cfg.Speed, 1*time.Second)
-		if err != nil {
-			log.Fatalf("[Producer] Failed to initialize realtime pacer: %v", err)
-		}
-		pacer = p
-	default:
-		pacer = NewMaxSpeedPacer()
-	}
-	defer pacer.Close()
-
-	// 3. Initialize Kafka Publisher
-	publisher := NewKafkaPublisher(cfg.Brokers, cfg.Topic, cfg.BatchSize, cfg.BatchTimeout, "snappy")
-	defer publisher.Close()
+	publisher := NewKafkaPublisher(cfg.Brokers, cfg.Topic, cfg.BatchSize, cfg.BatchTimeout)
 
 	startTime := time.Now()
-	var processedTicks int64
-	var lastReportedCount int64
-	lastReportTime := startTime
-	var latestTickTime string
+	var latestTick atomic.Pointer[models.MarketTick]
 
-	// 4. Background Progress Logger
-	ticker := time.NewTicker(2 * time.Second)
-	defer ticker.Stop()
-
+	// Background progress logger
 	go func() {
+		ticker := time.NewTicker(2 * time.Second)
+		defer ticker.Stop()
+		var lastDelivered int64
+		lastReport := startTime
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case now := <-ticker.C:
-				currentSent, errs := publisher.Stats()
-				deltaCount := currentSent - lastReportedCount
-				deltaSec := now.Sub(lastReportTime).Seconds()
-				instantRate := float64(deltaCount) / deltaSec
-				avgRate := float64(currentSent) / now.Sub(startTime).Seconds()
+				queued, delivered, failed := publisher.Stats()
+				instantRate := float64(delivered-lastDelivered) / now.Sub(lastReport).Seconds()
+				avgRate := float64(delivered) / now.Sub(startTime).Seconds()
+				lastDelivered, lastReport = delivered, now
 
-				lastReportedCount = currentSent
-				lastReportTime = now
-
-				log.Printf("[Stats] Sent: %-9d | Rate: %-8.0f msg/s | Avg: %-8.0f msg/s | EventTime: %-12s | Errors: %d",
-					currentSent, instantRate, avgRate, latestTickTime, errs)
+				eventTime := ""
+				if t := latestTick.Load(); t != nil {
+					eventTime = t.TradingTime
+				}
+				log.Printf("[Stats] Queued: %-9d | Delivered: %-9d | Rate: %-8.0f msg/s | Avg: %-8.0f msg/s | EventTime: %-12s | Failed: %d",
+					queued, delivered, instantRate, avgRate, eventTime, failed)
 			}
 		}
 	}()
 
-	// 5. Main Replay Stream Loop
 	log.Println("[Producer] Streaming started...")
 
-	for {
-		if ctx.Err() != nil {
-			break
-		}
-
-		if cfg.MaxTicks > 0 && processedTicks >= cfg.MaxTicks {
-			log.Printf("[Producer] Reached limit of %d ticks. Stopping.", cfg.MaxTicks)
-			break
-		}
-
+	var processedTicks int64
+	for cfg.MaxTicks == 0 || processedTicks < cfg.MaxTicks {
 		tick, err := reader.Next()
 		if err != nil {
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) {
 				log.Println("[Producer] Reached end of file (EOF).")
-				break
+			} else {
+				log.Printf("[Producer] Read error: %v", err)
 			}
-			log.Printf("[Producer] Read error: %v", err)
 			break
 		}
 
-		// Update pacing
 		if err := pacer.Wait(ctx, tick); err != nil {
+			log.Println("[Producer] Shutdown signal received, stopping...")
 			break
 		}
 
-		// Publish to Kafka
 		if err := publisher.Publish(ctx, tick); err != nil {
 			log.Printf("[Producer] Publish error: %v", err)
 		}
 
 		processedTicks++
-		latestTickTime = tick.TradingTime
+		latestTick.Store(tick)
+	}
+	if cfg.MaxTicks > 0 && processedTicks >= cfg.MaxTicks {
+		log.Printf("[Producer] Reached limit of %d ticks. Stopping.", cfg.MaxTicks)
 	}
 
-	// 6. Graceful Flush and Final Report
-	log.Println("[Producer] Flushing in-flight batches to Kafka...")
-	flushCtx, flushCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer flushCancel()
-	_ = publisher.Flush(flushCtx)
+	// Restore default signal handling so a second Ctrl+C exits immediately.
+	stop()
+
+	log.Println("[Producer] Waiting for in-flight batches to be delivered...")
+	_ = publisher.Close()
 
 	elapsed := time.Since(startTime)
-	sent, errs := publisher.Stats()
+	queued, delivered, failed := publisher.Stats()
 	totalLines, _ := reader.Stats()
 
 	log.Println("==================================================")
@@ -158,10 +134,9 @@ func main() {
 	log.Println("==================================================")
 	log.Printf("Total Elapsed Time : %v", elapsed.Round(time.Millisecond))
 	log.Printf("Total Lines Read   : %d", totalLines)
-	log.Printf("Total Ticks Sent   : %d", sent)
-	log.Printf("Publish Errors     : %d", errs)
-	if elapsed.Seconds() > 0 {
-		log.Printf("Overall Avg Rate   : %.0f msgs/second", float64(sent)/elapsed.Seconds())
-	}
+	log.Printf("Ticks Queued       : %d", queued)
+	log.Printf("Ticks Delivered    : %d", delivered)
+	log.Printf("Ticks Failed       : %d", failed)
+	log.Printf("Overall Avg Rate   : %.0f msgs/second", float64(delivered)/elapsed.Seconds())
 	log.Println("==================================================")
 }

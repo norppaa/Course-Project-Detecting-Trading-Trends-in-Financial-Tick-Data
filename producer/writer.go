@@ -12,46 +12,19 @@ import (
 	"trading-trends/pkg/models"
 )
 
-// Publisher defines the interface for streaming ticks to a broker.
-type Publisher interface {
-	Publish(ctx context.Context, tick *models.MarketTick) error
-	Flush(ctx context.Context) error
-	Close() error
-	Stats() (sent int64, errs int64)
-}
-
 // KafkaPublisher publishes market ticks to a Kafka/Redpanda topic.
+// Batching is left to kafka.Writer, which flushes a batch when it is full
+// or when batchTimeout expires, so slow replay modes are not delayed.
 type KafkaPublisher struct {
-	writer     *kafka.Writer
-	sentCount  int64
-	errorCount int64
-	buffer     []kafka.Message
-	bufferCap  int
-	lastFlush  time.Time
+	writer    *kafka.Writer
+	queued    atomic.Int64
+	delivered atomic.Int64
+	failed    atomic.Int64
 }
 
-// NewKafkaPublisher creates a new high-throughput batched Kafka publisher.
-func NewKafkaPublisher(brokers []string, topic string, batchSize int, batchTimeout time.Duration, compression string) *KafkaPublisher {
-	var compCodec kafka.Compression
-	switch compression {
-	case "snappy":
-		compCodec = kafka.Snappy
-	case "gzip":
-		compCodec = kafka.Gzip
-	case "lz4":
-		compCodec = kafka.Lz4
-	case "zstd":
-		compCodec = kafka.Zstd
-	default:
-		compCodec = kafka.Snappy
-	}
-
-	p := &KafkaPublisher{
-		bufferCap: batchSize,
-		buffer:    make([]kafka.Message, 0, batchSize),
-		lastFlush: time.Now(),
-	}
-
+// NewKafkaPublisher creates an asynchronous, Snappy-compressed Kafka publisher.
+func NewKafkaPublisher(brokers []string, topic string, batchSize int, batchTimeout time.Duration) *KafkaPublisher {
+	p := &KafkaPublisher{}
 	p.writer = &kafka.Writer{
 		Addr:         kafka.TCP(brokers...),
 		Topic:        topic,
@@ -59,68 +32,46 @@ func NewKafkaPublisher(brokers []string, topic string, batchSize int, batchTimeo
 		MaxAttempts:  5,
 		BatchSize:    batchSize,
 		BatchTimeout: batchTimeout,
-		Compression:  compCodec,
+		Compression:  kafka.Snappy,
 		RequiredAcks: kafka.RequireOne,
 		Async:        true,
 		Completion: func(messages []kafka.Message, err error) {
 			if err != nil {
-				atomic.AddInt64(&p.errorCount, int64(len(messages)))
+				p.failed.Add(int64(len(messages)))
 				log.Printf("[KafkaPublisher] Error producing %d messages: %v", len(messages), err)
+				return
 			}
+			p.delivered.Add(int64(len(messages)))
 		},
 	}
-
 	return p
 }
 
-// Publish serializes and adds a tick to the output batch buffer.
+// Publish serializes a tick and hands it to the async Kafka writer.
 func (p *KafkaPublisher) Publish(ctx context.Context, tick *models.MarketTick) error {
 	payload, err := json.Marshal(tick)
 	if err != nil {
 		return fmt.Errorf("failed to marshal tick: %w", err)
 	}
 
-	msg := kafka.Message{
+	err = p.writer.WriteMessages(ctx, kafka.Message{
 		Key:   []byte(tick.ID), // Symbol is the partition key
 		Value: payload,
 		Time:  tick.Timestamp,
+	})
+	if err != nil {
+		return err
 	}
-
-	p.buffer = append(p.buffer, msg)
-	atomic.AddInt64(&p.sentCount, 1)
-
-	// Flush buffer if capacity is reached
-	if len(p.buffer) >= p.bufferCap {
-		return p.Flush(ctx)
-	}
-
+	p.queued.Add(1)
 	return nil
 }
 
-// Flush dispatches any queued messages in the local buffer to the Kafka writer.
-func (p *KafkaPublisher) Flush(ctx context.Context) error {
-	if len(p.buffer) == 0 {
-		return nil
-	}
-
-	msgs := make([]kafka.Message, len(p.buffer))
-	copy(msgs, p.buffer)
-	p.buffer = p.buffer[:0]
-	p.lastFlush = time.Now()
-
-	return p.writer.WriteMessages(ctx, msgs...)
-}
-
-// Close flushes buffered messages and closes the Kafka writer.
+// Close sends any pending batches, waits for them to complete, and closes the writer.
 func (p *KafkaPublisher) Close() error {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	_ = p.Flush(ctx)
 	return p.writer.Close()
 }
 
-// Stats returns the total messages sent and production errors encountered.
-func (p *KafkaPublisher) Stats() (sent int64, errs int64) {
-	return atomic.LoadInt64(&p.sentCount), atomic.LoadInt64(&p.errorCount)
+// Stats returns how many messages were queued, confirmed by the broker, and failed.
+func (p *KafkaPublisher) Stats() (queued, delivered, failed int64) {
+	return p.queued.Load(), p.delivered.Load(), p.failed.Load()
 }

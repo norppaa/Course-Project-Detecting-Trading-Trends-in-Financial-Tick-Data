@@ -2,8 +2,8 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -22,70 +22,90 @@ type Config struct {
 	MaxTicks     int64 // 0 = unlimited
 }
 
-// LoadConfig parses flags and environment variables, giving flags precedence.
-func LoadConfig() *Config {
-	cfg := &Config{}
+// envVars maps each flag to the environment variable that can set it.
+var envVars = map[string]string{
+	"input":       "INPUT_FILE",
+	"brokers":     "KAFKA_BROKERS",
+	"topic":       "KAFKA_TOPIC",
+	"mode":        "REPLAY_MODE",
+	"rate":        "RATE_LIMIT",
+	"speed":       "SPEED_FACTOR",
+	"batch-size":  "BATCH_SIZE",
+	"only-trades": "ONLY_TRADES",
+	"max-ticks":   "MAX_TICKS",
+}
 
-	// Defaults with environment variable fallbacks
-	defaultInput := getEnv("INPUT_FILE", "data/trades_cleaned.csv.gz")
-	defaultBrokers := getEnv("KAFKA_BROKERS", "localhost:19092")
-	defaultTopic := getEnv("KAFKA_TOPIC", "market-ticks")
-	defaultMode := getEnv("REPLAY_MODE", "max")
-	defaultRate, _ := strconv.Atoi(getEnv("RATE_LIMIT", "10000"))
-	defaultSpeed, _ := strconv.ParseFloat(getEnv("SPEED_FACTOR", "10.0"), 64)
-	defaultBatchSize, _ := strconv.Atoi(getEnv("BATCH_SIZE", "5000"))
-	defaultOnlyTrades, _ := strconv.ParseBool(getEnv("ONLY_TRADES", "true"))
-	defaultMaxTicks, _ := strconv.ParseInt(getEnv("MAX_TICKS", "0"), 10, 64)
+// LoadConfig parses environment variables and command-line flags (flags take precedence)
+// and validates the result.
+func LoadConfig(args []string) (*Config, error) {
+	cfg := &Config{BatchTimeout: 10 * time.Millisecond}
+	var brokers string
 
-	// CLI flags
-	inputFlag := flag.String("input", defaultInput, "Path to input file (.csv or .csv.gz)")
-	brokersFlag := flag.String("brokers", defaultBrokers, "Comma-separated Kafka broker addresses")
-	topicFlag := flag.String("topic", defaultTopic, "Destination Kafka topic")
-	modeFlag := flag.String("mode", defaultMode, "Replay mode: max, rate, or realtime")
-	rateFlag := flag.Int("rate", defaultRate, "Target events per second (if mode=rate)")
-	speedFlag := flag.Float64("speed", defaultSpeed, "Speedup factor (if mode=realtime)")
-	batchSizeFlag := flag.Int("batch-size", defaultBatchSize, "Kafka batch buffer size")
-	onlyTradesFlag := flag.Bool("only-trades", defaultOnlyTrades, "Only stream trade events with non-empty Last price")
-	maxTicksFlag := flag.Int64("max-ticks", defaultMaxTicks, "Max ticks to process (0 = unlimited)")
+	fs := flag.NewFlagSet("producer", flag.ContinueOnError)
+	fs.StringVar(&cfg.InputFile, "input", "data/trades_cleaned.csv.gz", "Path to input file (.csv or .csv.gz)")
+	fs.StringVar(&brokers, "brokers", "localhost:19092", "Comma-separated Kafka broker addresses")
+	fs.StringVar(&cfg.Topic, "topic", "market-ticks", "Destination Kafka topic")
+	fs.StringVar(&cfg.ReplayMode, "mode", "max", "Replay mode: max, rate, or realtime")
+	fs.IntVar(&cfg.Rate, "rate", 10000, "Target events per second (if mode=rate)")
+	fs.Float64Var(&cfg.Speed, "speed", 10.0, "Speedup factor (if mode=realtime)")
+	fs.IntVar(&cfg.BatchSize, "batch-size", 5000, "Kafka batch size")
+	fs.BoolVar(&cfg.OnlyTrades, "only-trades", true, "Only stream trade events with a positive Last price")
+	fs.Int64Var(&cfg.MaxTicks, "max-ticks", 0, "Max ticks to process (0 = unlimited)")
 
-	flag.Parse()
-
-	// Handle input file existence fallback: if trades_cleaned.csv.gz doesn't exist, check .csv
-	inputFile := *inputFlag
-	if _, err := os.Stat(inputFile); os.IsNotExist(err) {
-		if strings.HasSuffix(inputFile, ".gz") {
-			uncompressed := strings.TrimSuffix(inputFile, ".gz")
-			if _, err := os.Stat(uncompressed); err == nil {
-				inputFile = uncompressed
-			}
-		} else {
-			compressed := inputFile + ".gz"
-			if _, err := os.Stat(compressed); err == nil {
-				inputFile = compressed
+	// Environment variables override defaults; parsing them through the flag set
+	// gives the same type checking as command-line flags.
+	for name, key := range envVars {
+		if val := os.Getenv(key); val != "" {
+			if err := fs.Set(name, val); err != nil {
+				return nil, fmt.Errorf("invalid %s=%q: %w", key, val, err)
 			}
 		}
 	}
-
-	cfg.InputFile = inputFile
-	cfg.Brokers = strings.Split(*brokersFlag, ",")
-	for i := range cfg.Brokers {
-		cfg.Brokers[i] = strings.TrimSpace(cfg.Brokers[i])
+	if err := fs.Parse(args); err != nil {
+		return nil, err
 	}
-	cfg.Topic = *topicFlag
-	cfg.ReplayMode = strings.ToLower(strings.TrimSpace(*modeFlag))
-	cfg.Rate = *rateFlag
-	cfg.Speed = *speedFlag
-	cfg.BatchSize = *batchSizeFlag
-	cfg.BatchTimeout = 10 * time.Millisecond
-	cfg.OnlyTrades = *onlyTradesFlag
-	cfg.MaxTicks = *maxTicksFlag
 
-	return cfg
+	cfg.InputFile = resolveInputFile(cfg.InputFile)
+	for _, b := range strings.Split(brokers, ",") {
+		if b = strings.TrimSpace(b); b != "" {
+			cfg.Brokers = append(cfg.Brokers, b)
+		}
+	}
+	cfg.ReplayMode = strings.ToLower(strings.TrimSpace(cfg.ReplayMode))
+
+	return cfg, cfg.validate()
 }
 
-func getEnv(key, defaultVal string) string {
-	if val, ok := os.LookupEnv(key); ok && val != "" {
-		return val
+func (cfg *Config) validate() error {
+	switch {
+	case len(cfg.Brokers) == 0:
+		return fmt.Errorf("at least one broker is required")
+	case cfg.ReplayMode != "max" && cfg.ReplayMode != "rate" && cfg.ReplayMode != "realtime":
+		return fmt.Errorf("unknown replay mode %q (expected max, rate, or realtime)", cfg.ReplayMode)
+	case cfg.ReplayMode == "rate" && cfg.Rate <= 0:
+		return fmt.Errorf("rate must be positive, got %d", cfg.Rate)
+	case cfg.ReplayMode == "realtime" && cfg.Speed <= 0:
+		return fmt.Errorf("speed must be positive, got %g", cfg.Speed)
+	case cfg.BatchSize <= 0:
+		return fmt.Errorf("batch size must be positive, got %d", cfg.BatchSize)
+	case cfg.MaxTicks < 0:
+		return fmt.Errorf("max ticks must not be negative, got %d", cfg.MaxTicks)
 	}
-	return defaultVal
+	return nil
+}
+
+// resolveInputFile falls back to the compressed or uncompressed variant of path
+// (adding or removing ".gz") when path itself does not exist.
+func resolveInputFile(path string) string {
+	if _, err := os.Stat(path); err == nil {
+		return path
+	}
+	alt := path + ".gz"
+	if strings.HasSuffix(path, ".gz") {
+		alt = strings.TrimSuffix(path, ".gz")
+	}
+	if _, err := os.Stat(alt); err == nil {
+		return alt
+	}
+	return path
 }

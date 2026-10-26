@@ -76,3 +76,45 @@ func TestSimulatedRealtimePacer(t *testing.T) {
 		t.Errorf("SimulatedRealtimePacer timing out of range: got %v, expected ~100ms", elapsed)
 	}
 }
+
+func TestSimulatedRealtimePacerDoesNotDrift(t *testing.T) {
+	// 200 events 50ms apart at 100x speed: each gap is 0.5ms (below the sleep
+	// threshold), but together they must still add up to ~100ms of wall time.
+	p, err := NewSimulatedRealtimePacer(100, time.Second)
+	if err != nil {
+		t.Fatalf("failed to create pacer: %v", err)
+	}
+
+	ctx := context.Background()
+	baseTime := time.Date(2021, 11, 8, 9, 0, 0, 0, time.UTC)
+
+	start := time.Now()
+	for i := 0; i <= 200; i++ {
+		tick := &models.MarketTick{ID: "AAPL", Timestamp: baseTime.Add(time.Duration(i) * 50 * time.Millisecond)}
+		if err := p.Wait(ctx, tick); err != nil {
+			t.Fatalf("wait error: %v", err)
+		}
+	}
+	elapsed := time.Since(start)
+
+	if elapsed < 95*time.Millisecond || elapsed > 250*time.Millisecond {
+		t.Errorf("SimulatedRealtimePacer drifted: got %v, expected ~100ms", elapsed)
+	}
+}
+
+func TestPacerStopsOnCancel(t *testing.T) {
+	p, err := NewFixedRatePacer(1)
+	if err != nil {
+		t.Fatalf("failed to create pacer: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	tick := &models.MarketTick{ID: "AAPL"}
+
+	if err := p.Wait(ctx, tick); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	cancel()
+	if err := p.Wait(ctx, tick); err == nil {
+		t.Fatal("expected error after cancel")
+	}
+}

@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"compress/gzip"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -119,5 +121,62 @@ func BenchmarkTickReader(b *testing.B) {
 		if err != nil {
 			break
 		}
+	}
+}
+
+func TestParseTimestampRejectsInvalid(t *testing.T) {
+	for _, tc := range [][2]string{
+		{"31-02-2021", "07:00:00.000"}, // impossible date
+		{"ab-11-2021", "07:00:00.000"}, // non-digit day
+		{"08-11-2021", "25:00:00"},     // hour out of range
+		{"08-11-2021", "07:00:00x123"}, // bad fraction separator
+	} {
+		if got, err := parseTimestamp(tc[0], tc[1]); err == nil {
+			t.Errorf("parseTimestamp(%q, %q) = %v, want error", tc[0], tc[1], got)
+		}
+	}
+}
+
+func TestReaderSkipsZeroPrices(t *testing.T) {
+	csvData := `A.FR,E,08-11-2021,07:00:00.000,0.00,07:00:00.000,08-11-2021
+B.FR,E,08-11-2021,07:00:00.000,0.0,07:00:00.000,08-11-2021
+C.FR,E,08-11-2021,07:00:00.000,1.5,07:00:00.000,08-11-2021`
+	reader := NewTickReaderFromReader(strings.NewReader(csvData), true)
+
+	tick, err := reader.Next()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if tick.ID != "C.FR" {
+		t.Errorf("expected zero-price rows to be skipped, got %+v", tick)
+	}
+	if _, err := reader.Next(); err != io.EOF {
+		t.Fatalf("expected io.EOF, got %v", err)
+	}
+}
+
+func TestNewTickReaderDetectsGzipWithoutExtension(t *testing.T) {
+	var buf bytes.Buffer
+	gzWriter := gzip.NewWriter(&buf)
+	gzWriter.Write([]byte("RDSA.NL,E,08-11-2021,09:00:00.000,18.450000,09:00:00.123,08-11-2021\n"))
+	gzWriter.Close()
+
+	path := filepath.Join(t.TempDir(), "ticks.csv")
+	if err := os.WriteFile(path, buf.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	reader, err := NewTickReader(path, true)
+	if err != nil {
+		t.Fatalf("failed to open reader: %v", err)
+	}
+	defer reader.Close()
+
+	tick, err := reader.Next()
+	if err != nil {
+		t.Fatalf("failed to read tick: %v", err)
+	}
+	if tick.ID != "RDSA.NL" {
+		t.Errorf("tick mismatch: got %+v", tick)
 	}
 }
