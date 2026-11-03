@@ -81,7 +81,23 @@ see scripts/readme.md
 
 ## 4. Message Schemas & Contracts
 
-### 4.1 Topic: `trading-signals` (Output of Component 3 Analyzer ➔ Input of Component 4 Gateway)
+All inter-service message schemas are centrally defined in [`pkg/models/tick.go`](pkg/models/tick.go).
+
+### 4.1 Topic: `market-ticks` (Input of Component 3 Analyzer)
+- **Partition Key:** `ID` (e.g. `RDSA.NL`). Ensures all ticks for a given symbol are delivered in strict FIFO order to the same partition.
+- **Payload Schema:**
+  ```json
+  {
+    "id": "RDSA.NL",
+    "sec_type": "E",
+    "timestamp": "2021-11-08T09:00:00.123Z",
+    "price": 18.45,
+    "trading_date": "08-11-2021",
+    "trading_time": "09:00:00.123"
+  }
+  ```
+
+### 4.2 Topic: `trading-signals` (Output of Component 3 Analyzer ➔ Input of Component 4 Gateway)
 
 Every time a 5-minute tumbling window completes for a symbol, the Stream Analyzer emits a JSON message to `trading-signals` with the following structure:
 
@@ -92,29 +108,16 @@ Every time a 5-minute tumbling window completes for a symbol, the Stream Analyze
   "window_start": "2021-11-08T09:00:00Z",
   "window_end": "2021-11-08T09:05:00Z",
   "window_index": 108,
-  "close": 19.852,
-  "ema38": 19.824,
-  "ema100": 19.780,
+  "last_price": 19.852,
+  "ema_38": 19.824,
+  "ema_100": 19.780,
   "signal": "BUY",
   "trade_count": 142,
   "timestamp": "2021-11-08T09:05:00Z"
 }
 ```
 
-#### Field Specifications:
-- `symbol` (string, required): Instrument symbol with exchange suffix (e.g., `RDSA.NL`, `AIR.FR`, `BMW.ETR`). Also accepts `id` or `ID`.
-- `sec_type` (string, optional): Security type (`E` for equity, `I` for index).
-- `window_start` / `window_end` (string or epoch, required): Tumbling window boundary timestamps (RFC3339, standard date string, or millisecond epoch).
-- `window_index` (integer): Sequential window counter since start of trading day.
-- `close` (float64, required): $Close_{s, w_i}$ — last observed trade price in the window. Also accepts `last`.
-- `ema38` (float64, required): $EMA^{38}_{s, w_i}$ computed via Query 1 formula.
-- `ema100` (float64, required): $EMA^{100}_{s, w_i}$ computed via Query 1 formula.
-- `signal` (string, optional): Query 2 breakout advisory. Set to `"BUY"` upon bullish breakout, `"SELL"` upon bearish breakout, or empty string / `"HOLD"` when no crossover occurs.
-- `timestamp` (string or epoch): Event creation timestamp.
-
----
-
-### 4.2 Web Gateway API & WebSocket Protocol (Components 4 & 5)
+### 4.3 Web Gateway API & WebSocket Protocol (Components 4 & 5)
 
 #### WebSocket Endpoint: `ws://localhost:8081/ws`
 Supports real-time filtered streaming between the browser frontend and gateway.
@@ -147,18 +150,20 @@ Supports real-time filtered streaming between the browser frontend and gateway.
 - `GET http://localhost:8081/api/alerts?limit=50`: Recent BUY and SELL advisories.
 - `GET http://localhost:8081/api/stats`: Store and throughput metrics.
 
----
+### 4.4 Data Producer Replay Modes
 
-### 4.3 Running Components 4 & 5 Standalone (Mock Mode)
+The Data Producer supports streaming directly from `.csv.gz` and `.csv` files:
 
-To run the Gateway and Frontend without needing the full Kafka pipeline running:
 ```bash
-# Start Gateway with mock data generator (simulates DEBS 2022 market ticks and real crossovers)
-go run ./gateway/main.go -mock
+# Benchmark Mode (max throughput)
+go run ./producer -input data/trades_cleaned.csv.gz -brokers localhost:19092
 
-# Open your browser:
-# http://localhost:8081 (directly served by Gateway)
-# or http://localhost:3000 (via nginx frontend container)
+# Fixed Rate Mode (e.g. 5,000 events/second)
+go run ./producer -input data/trades_cleaned.csv.gz -mode rate -rate 5000
+
+# Simulated Real-Time Mode (e.g. 10x accelerated historical replay)
+go run ./producer -input data/trades_cleaned.csv.gz -mode realtime -speed 10.0
+```
 ```
 
 ---

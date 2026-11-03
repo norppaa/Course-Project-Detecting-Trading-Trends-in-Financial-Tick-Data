@@ -102,6 +102,14 @@ func main() {
 				tradingTime := cols[23] // 0-indexed column 24
 				tradingDate := cols[26] // 0-indexed column 27
 
+				// Fallback to system Date and Time if trade-specific timestamps are blank
+				if tradingDate == "" {
+					tradingDate = date
+				}
+				if tradingTime == "" {
+					tradingTime = timeVal
+				}
+
 				// If onlyTrades is enabled, filter out events without a trade price
 				if *onlyTrades && (lastPrice == "" || lastPrice == "0" || lastPrice == "0.000000") {
 					continue

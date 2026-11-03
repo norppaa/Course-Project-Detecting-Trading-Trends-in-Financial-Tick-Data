@@ -40,7 +40,7 @@ func (s *SignalEvent) UnmarshalJSON(data []byte) error {
 	s.SecType = getString(raw, "sec_type", "SecType", "sectype")
 
 	// 3. Close / Last price
-	s.Close = getFloat(raw, "close", "Close", "last", "Last", "price", "Price")
+	s.Close = getFloat(raw, "close", "Close", "last", "Last", "price", "Price", "last_price", "LastPrice")
 
 	// 4. EMA38
 	s.EMA38 = getFloat(raw, "ema38", "EMA38", "ema_38", "Ema38", "ema_j1")
