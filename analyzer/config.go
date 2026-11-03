@@ -50,7 +50,7 @@ func LoadConfig(args []string) (*Config, error) {
 	start := fs.String("start", env("START_OFFSET", "first"), "where to start without committed offsets: first | last")
 
 	grace := fs.Duration("grace", envDuration("GRACE", 5*time.Second), "allowed out-of-orderness of event time")
-	policy := fs.String("policy", env("EMPTY_WINDOW_POLICY", "skip"), "empty-window policy: skip | carry")
+	policy := fs.String("policy", env("EMPTY_WINDOW_POLICY", "carry"), "empty-window policy: carry | skip")
 	suppress := fs.Bool("suppress-first", envBool("SUPPRESS_FIRST_SIGNAL", false), "suppress the advisory in a symbol's first window")
 
 	idle := fs.Duration("idle-flush", envDuration("IDLE_FLUSH", 5*time.Second), "close all windows after this long without input (0 = never)")

@@ -61,7 +61,7 @@ Each flag can also be set by the environment variable in brackets.
 | `-partitions` (`PARTITIONS`) | | `all` or `0,1,…`: read without a group |
 | `-start` (`START_OFFSET`) | `first` | `first` or `last`, when there is no committed offset |
 | `-grace` (`GRACE`) | `5s` | Allowed out-of-orderness of event time |
-| `-policy` (`EMPTY_WINDOW_POLICY`) | `skip` | `skip` or `carry` (see below) |
+| `-policy` (`EMPTY_WINDOW_POLICY`) | `carry` | `carry` or `skip` (see below) |
 | `-suppress-first` (`SUPPRESS_FIRST_SIGNAL`) | `false` | Hide the BUY every symbol gets in its first window |
 | `-idle-flush` (`IDLE_FLUSH`) | `5s` | Close all windows after this long with no input, `0` = never |
 | `-metrics-interval` (`METRICS_INTERVAL`) | `5s` | Stats log interval, `0` = off |
@@ -132,7 +132,7 @@ to warm up, so it gives no real crossovers.
 | Flag | Default | Meaning |
 |---|---|---|
 | `-grace` | `5s` | How long to wait for out-of-order events before closing a window |
-| `-policy` | `skip` | `skip`: ignore windows with no trades. `carry`: reuse the last price |
+| `-policy` | `carry` | `carry`: reuse the last price in windows with no trades. `skip`: ignore those windows |
 | `-suppress-first` | off | Hide the BUY every symbol gets in its first window |
 | `-signals-only` | off | Only write windows with a BUY or SELL |
 | `-output none` | | Discard results (for speed tests) |
@@ -156,13 +156,20 @@ One row per symbol per window, sorted by window and then symbol. `signal` is
   grace period. Events for an already closed window are dropped and counted.
 - EMA: `EMA = close · 2/(1+j) + previous EMA · (1 − 2/(1+j))`, with j = 38 or 100, starting from 0.
 - BUY: EMA38 goes from ≤ EMA100 to > EMA100. SELL: EMA38 goes from ≥ EMA100 to < EMA100.
-- Empty windows: `skip` evaluates a symbol only in windows where it traded
-  ("previous window" = its previous traded window). `carry` evaluates every
-  window after the first trade, reusing the last close.
+- Empty windows (team decision: `carry`). `carry` evaluates every window
+  after a symbol's first trade; a window without trades reuses the last close
+  (`has_tick: false`), so the EMAs keep converging toward the last price and
+  "previous window" in Eq. 2 and 4 is always the calendar-previous window.
+  `skip` instead evaluates a symbol only in windows where it traded.
+- With `carry`, a crossover can happen in a window with no trade (e.g. at
+  night), and every symbol gets one indicator per window until the end of
+  the replay. Carried windows close when the watermark passes them, i.e. when
+  a later tick or heartbeat arrives on the partition.
 
 ## Verified
 
 On the first 2 M trades of 08-11-2021, the online pipeline (producer →
 broker → analyzer, 4 partitions, both with one and with two analyzer
-instances) gives a result set byte-identical to the offline tool
-(70 683 windows, 3 971 BUY).
+instances) gives a result set byte-identical to the offline tool:
+80 349 windows (9 666 of them carried), 3 971 BUY with `carry`;
+70 683 windows, 3 971 BUY with `skip`.

@@ -24,6 +24,7 @@ import (
 
 	"github.com/segmentio/kafka-go"
 
+	"trading-trends/analyzer/engine"
 	"trading-trends/pkg/models"
 )
 
@@ -95,9 +96,9 @@ func logConfig(cfg *Config) {
 	if ind == "" {
 		ind = "(not published)"
 	}
-	policy := "skip"
-	if cfg.Engine.Policy != 0 {
-		policy = "carry"
+	policy := "carry"
+	if cfg.Engine.Policy == engine.SkipEmpty {
+		policy = "skip"
 	}
 	log.Println("==================================================")
 	log.Println("               STREAM ANALYZER                    ")

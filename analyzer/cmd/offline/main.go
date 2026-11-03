@@ -66,7 +66,7 @@ func main() {
 	input := flag.String("input", "data/trades_cleaned.csv", "cleaned CSV (or .csv.gz)")
 	output := flag.String("output", "", "results CSV (default: stdout, '-' for stdout, 'none' to discard)")
 	grace := flag.Duration("grace", 5*time.Second, "allowed out-of-orderness of event time")
-	policy := flag.String("policy", "skip", "empty-window policy: skip | carry")
+	policy := flag.String("policy", "carry", "empty-window policy: carry | skip")
 	suppress := flag.Bool("suppress-first", false, "suppress the advisory in a symbol's first window")
 	fallback := flag.Bool("fallback-system-time", false, "use system Date/Time when Trading time is missing")
 	signalsOnly := flag.Bool("signals-only", false, "write only windows with a BUY/SELL advisory")
