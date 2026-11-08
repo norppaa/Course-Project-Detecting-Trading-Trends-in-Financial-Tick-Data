@@ -58,7 +58,13 @@ func main() {
 	}
 	defer reader.Close()
 
-	publisher := NewKafkaPublisher(cfg.Brokers, cfg.Topic, cfg.BatchSize, cfg.BatchTimeout)
+	partitions, err := topicPartitionCount(ctx, cfg.Brokers, cfg.Topic)
+	if err != nil {
+		log.Fatalf("[Producer] Failed to read partitions of topic %s: %v", cfg.Topic, err)
+	}
+	log.Printf("[Producer] Topic %s has %d partitions", cfg.Topic, partitions)
+
+	publisher := NewKafkaPublisher(cfg.Brokers, cfg.Topic, cfg.BatchSize, cfg.BatchTimeout, partitions)
 
 	startTime := time.Now()
 	var latestTick atomic.Pointer[models.MarketTick]
@@ -105,6 +111,20 @@ func main() {
 		pending = pending[:0]
 	}
 
+	// Heartbeats and end-of-stream promise that all earlier ticks were sent.
+	// Once a tick is known to be lost that is no longer true, so stop sending them.
+	warnedLost := false
+	canPromise := func() bool {
+		_, _, failed := publisher.Stats()
+		if failed > 0 && !warnedLost {
+			log.Printf("[Producer] %d ticks failed: no more heartbeats or end-of-stream will be sent", failed)
+			warnedLost = true
+		}
+		return failed == 0
+	}
+
+	clock := heartbeatClock{interval: cfg.Heartbeat}
+	completed := true // false if the replay stops before its end
 	var processedTicks int64
 	for cfg.MaxTicks == 0 || processedTicks < cfg.MaxTicks {
 		tick, err := reader.Next()
@@ -113,12 +133,14 @@ func main() {
 				log.Println("[Producer] Reached end of file (EOF).")
 			} else {
 				log.Printf("[Producer] Read error: %v", err)
+				completed = false
 			}
 			break
 		}
 
 		if err := pacer.Wait(ctx, tick); err != nil {
 			log.Println("[Producer] Shutdown signal received, stopping...")
+			completed = false
 			break
 		}
 
@@ -129,8 +151,27 @@ func main() {
 
 		processedTicks++
 		latestTick.Store(tick)
+
+		if eventTime, due := clock.observe(tick.Timestamp); due {
+			// Queued ticks first: the heartbeat must not overtake them.
+			publishPending()
+			if canPromise() {
+				value, err := heartbeatValue(eventTime)
+				if err == nil {
+					err = publisher.PublishControl(ctx, models.KindHeartbeat, value, eventTime)
+				}
+				if err != nil {
+					log.Printf("[Producer] Heartbeat error: %v", err)
+				}
+			}
+		}
 	}
 	publishPending()
+	if completed && ctx.Err() == nil && canPromise() {
+		if err := publisher.PublishControl(ctx, models.KindEndOfStream, nil, clock.latest); err != nil {
+			log.Printf("[Producer] End-of-stream error: %v", err)
+		}
+	}
 	if cfg.MaxTicks > 0 && processedTicks >= cfg.MaxTicks {
 		log.Printf("[Producer] Reached limit of %d ticks. Stopping.", cfg.MaxTicks)
 	}
@@ -153,6 +194,8 @@ func main() {
 	log.Printf("Ticks Queued       : %d", queued)
 	log.Printf("Ticks Delivered    : %d", delivered)
 	log.Printf("Ticks Failed       : %d", failed)
+	controlSent, controlFailed := publisher.ControlStats()
+	log.Printf("Control Messages   : %d sent, %d failed", controlSent, controlFailed)
 	log.Printf("Overall Avg Rate   : %.0f msgs/second", float64(delivered)/elapsed.Seconds())
 	log.Println("==================================================")
 }

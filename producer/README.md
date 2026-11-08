@@ -13,6 +13,7 @@ The **Data Producer** is responsible for reading raw or preprocessed tick data (
   - `rate`: Fixed message rate (e.g., `10,000` msg/s) for steady-state workload testing.
   - `realtime`: Historical event-time delta replay scaled by a speedup factor (e.g., `10x`, `50x`) for live dashboard visualization.
 - **High-Throughput Batching:** Employs async batching (up to 5,000 messages) with Snappy compression using `kafka-go`.
+- **Heartbeats & End-of-Stream:** Sends control messages to every partition so windows close on quiet partitions, and all remaining windows close when a replay finishes. No end-of-stream is sent if the replay is interrupted, and neither message is sent after a tick has failed. The topic must exist: at startup the producer waits up to about 30 s for it and then exits.
 - **Graceful Shutdown & Observability:** Live throughput stats every 2 seconds, clean buffer flushing on `SIGINT` / `SIGTERM`.
 
 ---
@@ -45,6 +46,7 @@ The **Data Producer** is responsible for reading raw or preprocessed tick data (
 | `-batch-size`| `BATCH_SIZE` | `5000` | Kafka async message batch size |
 | `-only-trades` | `ONLY_TRADES` | `true` | Filter events to keep only valid trade prices (`Last > 0`) |
 | `-max-ticks` | `MAX_TICKS` | `0` | Stop after streaming $N$ ticks (`0` = no limit) |
+| `-heartbeat` | `HEARTBEAT_INTERVAL` | `1s` | Event time between heartbeats (`0` = no heartbeats) |
 
 ---
 
