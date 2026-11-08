@@ -49,11 +49,26 @@ func NewKafkaPublisher(brokers []string, topic string, batchSize int, batchTimeo
 
 // Publish serializes ticks and hands them to the async Kafka writer in one call.
 func (p *KafkaPublisher) Publish(ctx context.Context, ticks ...*models.MarketTick) error {
+	msgs, err := buildMessages(ticks)
+	if err != nil {
+		return err
+	}
+	stampProducedAt(msgs, time.Now())
+
+	if err := p.writer.WriteMessages(ctx, msgs...); err != nil {
+		return err
+	}
+	p.queued.Add(int64(len(msgs)))
+	return nil
+}
+
+// buildMessages converts ticks into Kafka messages keyed by symbol.
+func buildMessages(ticks []*models.MarketTick) ([]kafka.Message, error) {
 	msgs := make([]kafka.Message, len(ticks))
 	for i, tick := range ticks {
 		payload, err := json.Marshal(tick)
 		if err != nil {
-			return fmt.Errorf("failed to marshal tick: %w", err)
+			return nil, fmt.Errorf("failed to marshal tick: %w", err)
 		}
 		msgs[i] = kafka.Message{
 			Key:   []byte(tick.ID), // Symbol is the partition key
@@ -61,12 +76,20 @@ func (p *KafkaPublisher) Publish(ctx context.Context, ticks ...*models.MarketTic
 			Time:  tick.Timestamp,
 		}
 	}
+	return msgs, nil
+}
 
-	if err := p.writer.WriteMessages(ctx, msgs...); err != nil {
-		return err
+// stampProducedAt sets the wall-clock send time that the analyzer copies into
+// its output for end-to-end latency measurement. Messages share one header
+// slice, so a chunk costs a single timestamp format.
+func stampProducedAt(msgs []kafka.Message, now time.Time) {
+	headers := []kafka.Header{{
+		Key:   models.HeaderProducedAt,
+		Value: []byte(now.UTC().Format(time.RFC3339Nano)),
+	}}
+	for i := range msgs {
+		msgs[i].Headers = headers
 	}
-	p.queued.Add(int64(len(msgs)))
-	return nil
 }
 
 // Close sends any pending batches, waits for them to complete, and closes the writer.
