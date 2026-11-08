@@ -314,7 +314,7 @@ func (s *kafkaSink) Close() error { return s.w.Close() }
 
 type metrics struct {
 	start, last time.Time
-	lastMsgs    int64
+	lastTicks   int64
 }
 
 func (m *metrics) totals(d *dispatcher) (t workerStats, minWM, maxWM int64) {
@@ -323,6 +323,7 @@ func (m *metrics) totals(d *dispatcher) (t workerStats, minWM, maxWM int64) {
 		t.Messages += s.Messages
 		t.Ticks += s.Ticks
 		t.Heartbeats += s.Heartbeats
+		t.EOS += s.EOS
 		t.BadMessages += s.BadMessages
 		t.SinkErrors += s.SinkErrors
 		t.Engine.TicksLate += s.Engine.TicksLate
@@ -345,9 +346,9 @@ func (m *metrics) log(now time.Time, d *dispatcher, in *input, s *kafkaSink) {
 	dt := now.Sub(m.last).Seconds()
 	rate := 0.0
 	if dt > 0 {
-		rate = float64(t.Messages-m.lastMsgs) / dt
+		rate = float64(t.Ticks-m.lastTicks) / dt
 	}
-	m.last, m.lastMsgs = now, t.Messages
+	m.last, m.lastTicks = now, t.Ticks
 	avgLat := time.Duration(0)
 	if t.LatencyCount > 0 {
 		avgLat = time.Duration(t.LatencySumUs/t.LatencyCount) * time.Microsecond
@@ -356,8 +357,8 @@ func (m *metrics) log(now time.Time, d *dispatcher, in *input, s *kafkaSink) {
 	if minWM > 0 {
 		wm = time.UnixMicro(minWM).UTC().Format("02-01 15:04:05")
 	}
-	log.Printf("[Stats] in %-9d %8.0f msg/s | lag %-7d | late %-5d | windows %-8d | BUY %-6d SELL %-6d | watermark %s | out %d (err %d) | proc avg %v max %v",
-		t.Messages, rate, in.lag(), t.Engine.TicksLate, t.Engine.WindowsEmitted,
+	log.Printf("[Stats] ticks %-9d %8.0f/s | lag %-7d | late %-5d | windows %-8d | BUY %-6d SELL %-6d | watermark %s | out %d (err %d) | proc avg %v max %v",
+		t.Ticks, rate, in.lag(), t.Engine.TicksLate, t.Engine.WindowsEmitted,
 		t.Engine.BuySignals, t.Engine.SellSignals, wm, s.sent.Load(), s.failed.Load()+t.SinkErrors,
 		avgLat, time.Duration(t.LatencyMaxUs)*time.Microsecond)
 }
@@ -371,14 +372,14 @@ func (m *metrics) summary(d *dispatcher) {
 	active := time.Duration(d.lastInput.Load() - d.firstInput.Load())
 	rate := 0.0
 	if active > 0 {
-		rate = float64(t.Messages) / active.Seconds()
+		rate = float64(t.Ticks) / active.Seconds()
 	}
 	log.Println("==================================================")
 	log.Printf("Partitions      : %d", len(d.all()))
-	log.Printf("Messages        : %d (ticks %d, heartbeats %d, bad %d)", t.Messages, t.Ticks, t.Heartbeats, t.BadMessages)
+	log.Printf("Messages        : %d (ticks %d, heartbeats %d, eos %d, bad %d)", t.Messages, t.Ticks, t.Heartbeats, t.EOS, t.BadMessages)
 	log.Printf("Late (dropped)  : %d", t.Engine.TicksLate)
 	log.Printf("Windows emitted : %d", t.Engine.WindowsEmitted)
 	log.Printf("BUY / SELL      : %d / %d", t.Engine.BuySignals, t.Engine.SellSignals)
-	log.Printf("Elapsed         : %v (input active %v, %.0f msg/s)", el.Round(time.Millisecond), active.Round(time.Millisecond), rate)
+	log.Printf("Elapsed         : %v (input active %v, %.0f ticks/s)", el.Round(time.Millisecond), active.Round(time.Millisecond), rate)
 	log.Println("==================================================")
 }

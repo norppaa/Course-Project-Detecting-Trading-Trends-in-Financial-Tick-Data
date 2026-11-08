@@ -19,7 +19,8 @@ type Config struct {
 	BatchSize    int
 	BatchTimeout time.Duration
 	OnlyTrades   bool
-	MaxTicks     int64 // 0 = unlimited
+	MaxTicks     int64         // 0 = unlimited
+	Heartbeat    time.Duration // event time between heartbeats, 0 = off
 }
 
 // envVars maps each flag to the environment variable that can set it.
@@ -33,6 +34,7 @@ var envVars = map[string]string{
 	"batch-size":  "BATCH_SIZE",
 	"only-trades": "ONLY_TRADES",
 	"max-ticks":   "MAX_TICKS",
+	"heartbeat":   "HEARTBEAT_INTERVAL",
 }
 
 // LoadConfig parses environment variables and command-line flags (flags take precedence)
@@ -51,6 +53,8 @@ func LoadConfig(args []string) (*Config, error) {
 	fs.IntVar(&cfg.BatchSize, "batch-size", 5000, "Kafka batch size")
 	fs.BoolVar(&cfg.OnlyTrades, "only-trades", true, "Only stream trade events with a positive Last price")
 	fs.Int64Var(&cfg.MaxTicks, "max-ticks", 0, "Max ticks to process (0 = unlimited)")
+
+	fs.DurationVar(&cfg.Heartbeat, "heartbeat", time.Second, "Event time between heartbeats (0 = no heartbeats)")
 
 	// Environment variables override defaults; parsing them through the flag set
 	// gives the same type checking as command-line flags.
@@ -90,6 +94,8 @@ func (cfg *Config) validate() error {
 		return fmt.Errorf("batch size must be positive, got %d", cfg.BatchSize)
 	case cfg.MaxTicks < 0:
 		return fmt.Errorf("max ticks must not be negative, got %d", cfg.MaxTicks)
+	case cfg.Heartbeat < 0:
+		return fmt.Errorf("heartbeat must not be negative, got %v", cfg.Heartbeat)
 	}
 	return nil
 }

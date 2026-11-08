@@ -79,9 +79,10 @@ message is; no header means a tick.
 | `heartbeat` | `{"event_time": "…"}` | Watermark := event_time − grace. Closes windows on quiet partitions |
 | `eos` | empty | End of replay: closes all open windows |
 
-`heartbeat` and `eos` must be written to **every partition** by the producer.
-They are optional: without them, windows close when a later tick arrives on
-the same partition, and the last windows close after `-idle-flush`.
+`heartbeat` and `eos` are written to **every partition** by the producer (see
+`-heartbeat` in the producer README). Without heartbeats, windows close when a
+later tick arrives on the same partition. Without `eos`, the last windows close
+after `-idle-flush`.
 An optional `produced_at` header (RFC 3339, wall clock) is copied to the output
 so end-to-end latency can be measured.
 

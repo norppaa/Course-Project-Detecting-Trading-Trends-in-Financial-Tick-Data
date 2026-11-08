@@ -98,6 +98,7 @@ services:
       - RATE_LIMIT=10000      # Events/sec (used if REPLAY_MODE=rate)
       - SPEED_FACTOR=10.0     # Multiplier (used if REPLAY_MODE=realtime, e.g. 10x speed)
       - ONLY_TRADES=true      # Filter to events with non-empty Last price
+      - HEARTBEAT_INTERVAL=1s # Event time between heartbeats, 0 = none
     volumes:
       - ./data:/data:ro
     networks:
