@@ -185,4 +185,3 @@ func (s *MemoryStore) GetStats() StoreStats {
 		LastEventTime:   s.lastEventTime,
 	}
 }
-

@@ -182,4 +182,3 @@ func parseTimeField(m map[string]interface{}, keys ...string) time.Time {
 	}
 	return time.Time{}
 }
-

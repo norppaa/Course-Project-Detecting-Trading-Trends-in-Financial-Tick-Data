@@ -107,4 +107,3 @@ func (c *SignalConsumer) Close() error {
 	}
 	return nil
 }
-

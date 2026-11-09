@@ -146,4 +146,3 @@ func (h *Hub) sendWelcome(client *Client) {
 		client.Send(msg)
 	}
 }
-

@@ -90,4 +90,3 @@ func TestServerEndpoints(t *testing.T) {
 		t.Fatalf("Expected 200 OK for /api/stats, got %d", w.Code)
 	}
 }
-

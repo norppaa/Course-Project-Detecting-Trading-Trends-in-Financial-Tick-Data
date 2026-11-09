@@ -89,4 +89,3 @@ func TestConcurrentStore(t *testing.T) {
 		t.Errorf("Expected %d signals, got %d", workers*iterations, stats.TotalSignals)
 	}
 }
-

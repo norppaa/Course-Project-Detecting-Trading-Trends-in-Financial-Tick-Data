@@ -95,4 +95,3 @@ func TestSignalEventUnmarshal(t *testing.T) {
 		t.Errorf("Unexpected values in s4 (TradeSignal): %+v", s4)
 	}
 }
-

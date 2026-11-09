@@ -98,4 +98,3 @@ func TestWebSocketSubscriptionAndBroadcast(t *testing.T) {
 		t.Fatalf("Expected signal type, got %s", broadcastMsg.Type)
 	}
 }
-
