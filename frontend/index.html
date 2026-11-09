@@ -2,10 +2,689 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Trading Trends Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Trading Trends Monitor | CS-E4780</title>
+  <style>
+    /* ===== RESET & BASE ===== */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0a0e1a;
+      --surface: #111827;
+      --surface2: #1a2236;
+      --border: #1e293b;
+      --text: #e2e8f0;
+      --text2: #94a3b8;
+      --text3: #64748b;
+      --cyan: #22d3ee;
+      --amber: #fb923c;
+      --green: #34d399;
+      --red: #f87171;
+      --blue: #60a5fa;
+      --mono: 'SF Mono', 'Cascadia Code', 'Fira Code', Consolas, monospace;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      font-size: 13px;
+      line-height: 1.4;
+      height: 100vh;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ===== TOP BAR ===== */
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 8px 16px;
+      flex-shrink: 0;
+      min-height: 44px;
+    }
+
+    .topbar-left {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .topbar-left h1 {
+      font-size: 15px;
+      font-weight: 700;
+      color: #fff;
+    }
+
+    .topbar-left .subtitle {
+      font-size: 11px;
+      color: var(--text3);
+    }
+
+    .topbar-center {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .sym-btn {
+      background: transparent;
+      color: var(--text2);
+      border: 1px solid var(--border);
+      padding: 4px 10px;
+      border-radius: 4px;
+      font-size: 12px;
+      font-weight: 600;
+      font-family: var(--mono);
+      cursor: pointer;
+      transition: all 0.12s;
+    }
+
+    .sym-btn:hover { border-color: var(--blue); color: #fff; }
+    .sym-btn.active { background: var(--blue); color: #fff; border-color: var(--blue); }
+
+    .topbar-right {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 11px;
+      font-weight: 700;
+      padding: 3px 8px;
+      border-radius: 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.3px;
+    }
+
+    .badge.live { background: rgba(52,211,153,0.15); color: var(--green); border: 1px solid rgba(52,211,153,0.3); }
+    .badge.connecting { background: rgba(251,191,36,0.12); color: #fbbf24; border: 1px solid rgba(251,191,36,0.3); }
+
+    .badge-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: currentColor;
+      animation: pulse 1.5s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+
+    .icon-btn {
+      background: transparent;
+      color: var(--text2);
+      border: 1px solid var(--border);
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-size: 12px;
+      cursor: pointer;
+      transition: all 0.12s;
+    }
+
+    .icon-btn:hover { border-color: var(--blue); color: #fff; }
+
+    /* ===== KPI STRIP ===== */
+    .kpi-strip {
+      display: flex;
+      gap: 1px;
+      background: var(--border);
+      flex-shrink: 0;
+    }
+
+    .kpi {
+      flex: 1;
+      background: var(--surface);
+      padding: 10px 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .kpi-label {
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text3);
+    }
+
+    .kpi-val {
+      font-size: 20px;
+      font-weight: 800;
+      font-family: var(--mono);
+      color: #fff;
+    }
+
+    .kpi-val.cyan { color: var(--cyan); }
+    .kpi-val.amber { color: var(--amber); }
+    .kpi-val.green { color: var(--green); }
+    .kpi-val.red { color: var(--red); }
+
+    .kpi-sub {
+      font-size: 10px;
+      color: var(--text3);
+      font-family: var(--mono);
+    }
+
+    .signal-chip {
+      display: inline-block;
+      font-size: 10px;
+      font-weight: 800;
+      padding: 2px 6px;
+      border-radius: 3px;
+      font-family: var(--mono);
+    }
+
+    .signal-chip.buy { background: var(--green); color: #000; }
+    .signal-chip.sell { background: var(--red); color: #fff; }
+    .signal-chip.neutral { background: var(--border); color: var(--text2); }
+
+    /* ===== MAIN LAYOUT ===== */
+    .main {
+      display: flex;
+      flex: 1;
+      overflow: hidden;
+      min-height: 0;
+    }
+
+    /* --- Chart Panel (left) --- */
+    .chart-panel {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      border-right: 1px solid var(--border);
+      min-width: 0;
+    }
+
+    .chart-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: var(--surface2);
+      border-bottom: 1px solid var(--border);
+      padding: 6px 12px;
+      flex-shrink: 0;
+    }
+
+    .chart-toolbar-left {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      font-weight: 600;
+      color: #fff;
+    }
+
+    .chart-toolbar-right {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 11px;
+      color: var(--text2);
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .legend-item input { cursor: pointer; }
+
+    .legend-swatch {
+      width: 10px;
+      height: 3px;
+      border-radius: 2px;
+    }
+
+    .chart-area {
+      flex: 1;
+      background: #060912;
+      position: relative;
+      min-height: 0;
+    }
+
+    #chart-canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+
+    .chart-status {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      padding: 4px 12px;
+      font-size: 11px;
+      color: var(--text3);
+      flex-shrink: 0;
+    }
+
+    /* --- Right Panel --- */
+    .right-panel {
+      width: 360px;
+      display: flex;
+      flex-direction: column;
+      flex-shrink: 0;
+      background: var(--surface);
+    }
+
+    .tabs-row {
+      display: flex;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+
+    .tab-btn {
+      flex: 1;
+      padding: 8px 0;
+      text-align: center;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text3);
+      background: transparent;
+      border: none;
+      border-bottom: 2px solid transparent;
+      cursor: pointer;
+      transition: all 0.12s;
+    }
+
+    .tab-btn:hover { color: var(--text2); }
+    .tab-btn.active { color: #fff; border-bottom-color: var(--blue); }
+
+    .tab-content {
+      display: none;
+      flex: 1;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .tab-content.active { display: flex; }
+
+    .filter-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 6px 10px;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface2);
+      font-size: 11px;
+      color: var(--text3);
+      flex-shrink: 0;
+    }
+
+    .filter-pills {
+      display: flex;
+      gap: 3px;
+    }
+
+    .fpill {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text3);
+      padding: 2px 7px;
+      border-radius: 3px;
+      font-size: 10px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.12s;
+    }
+
+    .fpill.active { background: var(--blue); color: #fff; border-color: var(--blue); }
+
+    .scroll-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 6px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    /* Alert cards */
+    .alert-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 10px;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: background 0.1s;
+      border-left: 3px solid transparent;
+    }
+
+    .alert-row:hover { background: rgba(255,255,255,0.03); }
+    .alert-row.buy { border-left-color: var(--green); background: rgba(52,211,153,0.04); }
+    .alert-row.sell { border-left-color: var(--red); background: rgba(248,113,113,0.04); }
+
+    .alert-dir {
+      width: 32px;
+      height: 32px;
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 16px;
+      flex-shrink: 0;
+    }
+
+    .alert-dir.buy { background: rgba(52,211,153,0.15); }
+    .alert-dir.sell { background: rgba(248,113,113,0.15); }
+
+    .alert-info { flex: 1; min-width: 0; }
+
+    .alert-info-top {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      font-weight: 700;
+      color: #fff;
+    }
+
+    .alert-info-top .time {
+      font-size: 10px;
+      font-weight: 400;
+      color: var(--text3);
+    }
+
+    .alert-info-bottom {
+      font-size: 10px;
+      color: var(--text3);
+      font-family: var(--mono);
+    }
+
+    .alert-price {
+      font-size: 13px;
+      font-weight: 800;
+      font-family: var(--mono);
+      color: #fff;
+      text-align: right;
+      flex-shrink: 0;
+    }
+
+    /* History table */
+    .hist-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 11px;
+    }
+
+    .hist-table th {
+      position: sticky;
+      top: 0;
+      background: var(--surface2);
+      color: var(--text3);
+      font-weight: 700;
+      padding: 6px 8px;
+      text-align: right;
+      border-bottom: 1px solid var(--border);
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.3px;
+    }
+
+    .hist-table th:first-child { text-align: left; }
+
+    .hist-table td {
+      padding: 5px 8px;
+      text-align: right;
+      border-bottom: 1px solid rgba(30,41,59,0.5);
+      font-family: var(--mono);
+      font-size: 11px;
+    }
+
+    .hist-table td:first-child { text-align: left; color: var(--text3); }
+    .hist-table tr:hover { background: rgba(255,255,255,0.02); }
+
+    /* Debug log */
+    .debug-entry {
+      padding: 5px 8px;
+      border-bottom: 1px solid rgba(30,41,59,0.4);
+      font-family: var(--mono);
+      font-size: 10px;
+    }
+
+    .debug-head {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-bottom: 2px;
+    }
+
+    .debug-type {
+      background: rgba(56,189,248,0.15);
+      color: #38bdf8;
+      padding: 1px 4px;
+      border-radius: 2px;
+      font-size: 9px;
+      font-weight: 700;
+    }
+
+    .debug-json {
+      color: var(--text3);
+      white-space: pre-wrap;
+      word-break: break-all;
+      max-height: 60px;
+      overflow: hidden;
+    }
+
+    /* Footer */
+    .app-foot {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      padding: 4px 16px;
+      font-size: 10px;
+      color: var(--text3);
+      flex-shrink: 0;
+    }
+
+    .app-foot code {
+      background: rgba(96,165,250,0.1);
+      color: var(--blue);
+      padding: 1px 4px;
+      border-radius: 2px;
+      font-family: var(--mono);
+    }
+
+    /* Empty state */
+    .empty-msg {
+      text-align: center;
+      color: var(--text3);
+      padding: 40px 20px;
+      font-size: 12px;
+    }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: var(--text3); }
+  </style>
 </head>
 <body>
-  <h1>Trading Trends Dashboard</h1>
-  <p>Frontend initialized. Ready for implementation.</p>
+
+  <!-- ===== TOP BAR ===== -->
+  <header class="topbar">
+    <div class="topbar-left">
+      <span style="font-size:18px">📈</span>
+      <div>
+        <h1>Trading Trends Monitor</h1>
+        <div class="subtitle">CS-E4780 · EMA 38/100 Crossover Strategy · 5-min Tumbling Windows</div>
+      </div>
+    </div>
+
+    <div class="topbar-center" id="symbol-pills">
+      <!-- JS fills these -->
+    </div>
+
+    <div class="topbar-right">
+      <div id="status-badge" class="badge connecting">
+        <span class="badge-dot"></span>
+        <span id="status-text">Connecting</span>
+      </div>
+      <button id="btn-sound" class="icon-btn" title="Toggle sound">🔔</button>
+      <button id="btn-reconnect" class="icon-btn" title="Reconnect">↻</button>
+    </div>
+  </header>
+
+  <!-- ===== KPI STRIP ===== -->
+  <section class="kpi-strip">
+    <div class="kpi">
+      <div class="kpi-label">Last Close</div>
+      <div class="kpi-val" id="kpi-price">—</div>
+      <div class="kpi-sub" id="kpi-window-time">—</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label">EMA 38 <span style="color:var(--cyan)">●</span></div>
+      <div class="kpi-val cyan" id="kpi-ema38">—</div>
+      <div class="kpi-sub">Fast indicator · α = 0.0513</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label">EMA 100 <span style="color:var(--amber)">●</span></div>
+      <div class="kpi-val amber" id="kpi-ema100">—</div>
+      <div class="kpi-sub">Slow indicator · α = 0.0198</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label">Spread (EMA38 − EMA100)</div>
+      <div class="kpi-val" id="kpi-spread">—</div>
+      <div class="kpi-sub" id="kpi-signal-desc">—</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label">Signal</div>
+      <div id="kpi-signal-badge" class="signal-chip neutral" style="margin:4px 0">—</div>
+      <div class="kpi-sub">
+        <span id="tel-windows">0</span> windows · <span id="tel-symbols">0</span> sym ·
+        <span style="color:var(--green)" id="tel-buys">0</span>B /
+        <span style="color:var(--red)" id="tel-sells">0</span>S
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== MAIN AREA ===== -->
+  <div class="main">
+    <!-- Chart -->
+    <section class="chart-panel">
+      <div class="chart-toolbar">
+        <div class="chart-toolbar-left">
+          <span id="chart-heading">RDSA.NL</span>
+          <span style="color:var(--text3);font-weight:400">5m windows</span>
+        </div>
+        <div class="chart-toolbar-right">
+          <label class="legend-item">
+            <input type="checkbox" id="chk-ema38" checked>
+            <span class="legend-swatch" style="background:var(--cyan)"></span> EMA38
+          </label>
+          <label class="legend-item">
+            <input type="checkbox" id="chk-ema100" checked>
+            <span class="legend-swatch" style="background:var(--amber)"></span> EMA100
+          </label>
+          <label class="legend-item">
+            <input type="checkbox" id="chk-markers" checked>
+            ▲▼ Signals
+          </label>
+          <button id="btn-fit" class="icon-btn" style="font-size:11px">Fit</button>
+        </div>
+      </div>
+
+      <div class="chart-area" id="chart-stage">
+        <canvas id="chart-canvas"></canvas>
+      </div>
+
+      <div class="chart-status">
+        <div id="chart-cursor-info">Hover chart to inspect values</div>
+        <div>
+          <span style="color:var(--green)">▲ BUY</span> EMA38 > EMA100 &nbsp;|&nbsp;
+          <span style="color:var(--red)">▼ SELL</span> EMA38 < EMA100
+        </div>
+      </div>
+    </section>
+
+    <!-- Right Panel -->
+    <aside class="right-panel">
+      <div class="tabs-row">
+        <button class="tab-btn active" data-tab="tab-alerts">Alerts <span id="alert-count-pill"></span></button>
+        <button class="tab-btn" data-tab="tab-history">History</button>
+        <button class="tab-btn" data-tab="tab-debugger">Debug</button>
+      </div>
+
+      <!-- Alerts Tab -->
+      <div id="tab-alerts" class="tab-content active">
+        <div class="filter-bar">
+          <span>Crossover Advisories</span>
+          <div class="filter-pills">
+            <button class="fpill active" data-filter="all">All</button>
+            <button class="fpill" data-filter="BUY">Buys</button>
+            <button class="fpill" data-filter="SELL">Sells</button>
+          </div>
+        </div>
+        <div class="scroll-list" id="alerts-scroll-body">
+          <div class="empty-msg">Waiting for crossover events…</div>
+        </div>
+      </div>
+
+      <!-- History Tab -->
+      <div id="tab-history" class="tab-content">
+        <div class="filter-bar">
+          <span>Window history for <strong id="tab-hist-sym" style="color:#fff">RDSA.NL</strong></span>
+        </div>
+        <div class="scroll-list" style="padding:0">
+          <table class="hist-table">
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Close</th>
+                <th>EMA 38</th>
+                <th>EMA 100</th>
+                <th>Signal</th>
+              </tr>
+            </thead>
+            <tbody id="history-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Debug Tab -->
+      <div id="tab-debugger" class="tab-content">
+        <div class="filter-bar">
+          <span>WebSocket Frames</span>
+          <button id="btn-clear-debug" class="icon-btn" style="font-size:10px;padding:2px 6px">Clear</button>
+        </div>
+        <div class="scroll-list" id="debug-scroll-body">
+          <div class="empty-msg">No messages yet</div>
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <!-- ===== FOOTER ===== -->
+  <footer class="app-foot">
+    <span>Gateway: <code id="footer-endpoint">ws://localhost:8081/ws</code></span>
+    <span>Redpanda → Analyzer → Gateway → Dashboard</span>
+    <span>CS-E4780 Scalable Systems</span>
+  </footer>
+
+  <!-- Hidden select for compatibility -->
+  <select id="symbol-select" style="display:none"></select>
+
+  <script src="app.js"></script>
 </body>
 </html>

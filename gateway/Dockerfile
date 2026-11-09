@@ -13,6 +13,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -o /app/bin/gateway ./gateway
 FROM alpine:latest
 WORKDIR /app
 COPY --from=builder /app/bin/gateway .
+COPY --from=builder /app/frontend /app/frontend
 
 EXPOSE 8081
 CMD ["./gateway"]

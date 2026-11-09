@@ -81,9 +81,9 @@ see scripts/readme.md
 
 ## 4. Message Schemas & Contracts
 
-All inter-service message schemas are centrally defined in [`pkg/models/tick.go`](file:///home/noora/school/scaddis/Course-Project-Detecting-Trading-Trends-in-Financial-Tick-Data/pkg/models/tick.go).
+All inter-service message schemas are centrally defined in [`pkg/models/tick.go`](pkg/models/tick.go).
 
-### Market Ticks (`market-ticks` Topic)
+### 4.1 Topic: `market-ticks` (Input of Component 3 Analyzer)
 - **Partition Key:** `ID` (e.g. `RDSA.NL`). Ensures all ticks for a given symbol are delivered in strict FIFO order to the same partition.
 - **Payload Schema:**
   ```json
@@ -97,7 +97,60 @@ All inter-service message schemas are centrally defined in [`pkg/models/tick.go`
   }
   ```
 
-### Data Producer Replay Modes
+### 4.2 Topic: `trading-signals` (Output of Component 3 Analyzer ➔ Input of Component 4 Gateway)
+
+Every time a 5-minute tumbling window completes for a symbol, the Stream Analyzer emits a JSON message to `trading-signals` with the following structure:
+
+```json
+{
+  "symbol": "RDSA.NL",
+  "sec_type": "E",
+  "window_start": "2021-11-08T09:00:00Z",
+  "window_end": "2021-11-08T09:05:00Z",
+  "window_index": 108,
+  "last_price": 19.852,
+  "ema_38": 19.824,
+  "ema_100": 19.780,
+  "signal": "BUY",
+  "trade_count": 142,
+  "timestamp": "2021-11-08T09:05:00Z"
+}
+```
+
+### 4.3 Web Gateway API & WebSocket Protocol (Components 4 & 5)
+
+#### WebSocket Endpoint: `ws://localhost:8081/ws`
+Supports real-time filtered streaming between the browser frontend and gateway.
+
+**Client Commands (Inbound to Gateway):**
+```json
+// Subscribe to specific symbols
+{ "action": "subscribe", "symbols": ["RDSA.NL", "AIR.FR"] }
+
+// Unsubscribe
+{ "action": "unsubscribe", "symbols": ["RDSA.NL"] }
+
+// Request window history for chart rendering
+{ "action": "get_history", "symbol": "RDSA.NL" }
+
+// Heartbeat ping
+{ "action": "ping" }
+```
+
+**Gateway Events (Outbound to Client):**
+- `type: "info"`: Server handshake with available symbols, stats, and recent alerts.
+- `type: "signal"`: Live window update for subscribed symbol (`data: SignalEvent`).
+- `type: "alert"`: Immediate breakout advisory broadcast (`data: SignalEvent`).
+- `type: "history"`: Historical window array for charting (`data: []SignalEvent`).
+
+#### REST Endpoints:
+- `GET http://localhost:8081/health`: Gateway healthcheck and active client count.
+- `GET http://localhost:8081/api/symbols`: JSON list of all known symbols.
+- `GET http://localhost:8081/api/history?symbol=RDSA.NL&limit=200`: Historical candle/EMA points.
+- `GET http://localhost:8081/api/alerts?limit=50`: Recent BUY and SELL advisories.
+- `GET http://localhost:8081/api/stats`: Store and throughput metrics.
+
+### 4.4 Data Producer Replay Modes
 
 The Data Producer supports streaming directly from `.csv.gz` and `.csv` files:
 
@@ -110,6 +163,7 @@ go run ./producer -input data/trades_cleaned.csv.gz -mode rate -rate 5000
 
 # Simulated Real-Time Mode (e.g. 10x accelerated historical replay)
 go run ./producer -input data/trades_cleaned.csv.gz -mode realtime -speed 10.0
+```
 ```
 
 ---
