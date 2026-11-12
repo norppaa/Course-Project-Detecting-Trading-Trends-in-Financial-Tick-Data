@@ -68,7 +68,57 @@
     .topbar-center {
       display: flex;
       align-items: center;
+      gap: 8px;
+      flex: 1;
+      justify-content: center;
+      min-width: 0;
+      margin: 0 12px;
+    }
+
+    .sym-picker {
+      display: flex;
+      align-items: center;
       gap: 6px;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 3px 8px;
+      max-width: 460px;
+      width: 100%;
+    }
+
+    .sym-search {
+      background: transparent;
+      border: none;
+      outline: none;
+      color: #fff;
+      font-family: var(--mono);
+      font-size: 12px;
+      width: 130px;
+      min-width: 80px;
+    }
+
+    .sym-search::placeholder { color: var(--text3); }
+
+    .sym-select {
+      flex: 1;
+      min-width: 140px;
+      background: var(--surface);
+      color: #fff;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 3px 8px;
+      font-family: var(--mono);
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    .sym-count {
+      font-size: 10px;
+      font-family: var(--mono);
+      color: var(--text3);
+      white-space: nowrap;
     }
 
     .sym-btn {
@@ -82,6 +132,8 @@
       font-family: var(--mono);
       cursor: pointer;
       transition: all 0.12s;
+      white-space: nowrap;
+      flex-shrink: 0;
     }
 
     .sym-btn:hover { border-color: var(--blue); color: #fff; }
@@ -407,6 +459,20 @@
       font-size: 10px;
       color: var(--text3);
       font-family: var(--mono);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .warmup-tag {
+      font-size: 9px;
+      font-weight: 700;
+      color: #fbbf24;
+      background: rgba(251, 191, 36, 0.12);
+      border: 1px solid rgba(251, 191, 36, 0.25);
+      padding: 0 4px;
+      border-radius: 3px;
+      text-transform: uppercase;
     }
 
     .alert-price {
@@ -532,8 +598,12 @@
       </div>
     </div>
 
-    <div class="topbar-center" id="symbol-pills">
-      <!-- JS fills these -->
+    <div class="topbar-center" id="symbol-bar">
+      <div class="sym-picker" id="sym-picker">
+        <input type="text" id="symbol-search" class="sym-search" placeholder="Filter symbol…" autocomplete="off">
+        <select id="symbol-select" class="sym-select"></select>
+        <span id="symbol-count" class="sym-count">0 sym</span>
+      </div>
     </div>
 
     <div class="topbar-right">
@@ -585,8 +655,8 @@
     <section class="chart-panel">
       <div class="chart-toolbar">
         <div class="chart-toolbar-left">
-          <span id="chart-heading">RDSA.NL</span>
-          <span style="color:var(--text3);font-weight:400">5m windows</span>
+          <span id="chart-heading">—</span>
+          <span id="chart-window-count" style="color:var(--text3);font-weight:400">5m windows</span>
         </div>
         <div class="chart-toolbar-right">
           <label class="legend-item">
@@ -600,6 +670,10 @@
           <label class="legend-item">
             <input type="checkbox" id="chk-markers" checked>
             ▲▼ Signals
+          </label>
+          <label class="legend-item" title="Include unconverged EMA warm-up values in Y-axis scale">
+            <input type="checkbox" id="chk-fullscale">
+            Full Scale
           </label>
           <button id="btn-fit" class="icon-btn" style="font-size:11px">Fit</button>
         </div>
@@ -632,6 +706,7 @@
           <span>Crossover Advisories</span>
           <div class="filter-pills">
             <button class="fpill active" data-filter="all">All</button>
+            <button class="fpill" data-filter="real">Crossovers</button>
             <button class="fpill" data-filter="BUY">Buys</button>
             <button class="fpill" data-filter="SELL">Sells</button>
           </div>
@@ -644,7 +719,7 @@
       <!-- History Tab -->
       <div id="tab-history" class="tab-content">
         <div class="filter-bar">
-          <span>Window history for <strong id="tab-hist-sym" style="color:#fff">RDSA.NL</strong></span>
+          <span>Window history for <strong id="tab-hist-sym" style="color:#fff">—</strong></span>
         </div>
         <div class="scroll-list" style="padding:0">
           <table class="hist-table">
@@ -678,12 +753,9 @@
   <!-- ===== FOOTER ===== -->
   <footer class="app-foot">
     <span>Gateway: <code id="footer-endpoint">ws://localhost:8081/ws</code></span>
-    <span>Redpanda → Analyzer → Gateway → Dashboard</span>
+    <span id="footer-latency">Redpanda → Analyzer → Gateway → Dashboard</span>
     <span>CS-E4780 Scalable Systems</span>
   </footer>
-
-  <!-- Hidden select for compatibility -->
-  <select id="symbol-select" style="display:none"></select>
 
   <script src="app.js"></script>
 </body>

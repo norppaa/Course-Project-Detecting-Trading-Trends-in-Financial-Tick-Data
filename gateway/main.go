@@ -14,25 +14,18 @@ import (
 	"time"
 
 	"trading-trends/gateway/kafka"
-	"trading-trends/gateway/mock"
 	"trading-trends/gateway/server"
 	"trading-trends/gateway/store"
 )
 
 func main() {
 	// 1. Command-line flags and environment variable defaults
-	defaultBrokers := getEnv("KAFKA_BROKERS", "localhost:19092")
-	defaultPort := getEnv("PORT", "8081")
-	defaultTopic := getEnv("SIGNALS_TOPIC", "trading-signals")
-	defaultGroup := getEnv("CONSUMER_GROUP", "web-gateway-group")
-	defaultMock := getEnvBool("ENABLE_MOCK", false)
-
-	port := flag.String("port", defaultPort, "HTTP/WebSocket server port")
-	brokersStr := flag.String("kafka-brokers", defaultBrokers, "Comma-separated Kafka broker addresses")
-	topic := flag.String("topic", defaultTopic, "Kafka topic for trading signals")
-	groupID := flag.String("group", defaultGroup, "Kafka consumer group ID")
-	enableMock := flag.Bool("mock", defaultMock, "Run in mock mode generating simulated EMA signals")
-	mockIntervalMs := flag.Int("mock-interval-ms", 1200, "Interval in ms between simulated window events in mock mode")
+	port := flag.String("port", getEnv("PORT", "8081"), "HTTP/WebSocket server port")
+	brokersStr := flag.String("kafka-brokers", getEnv("KAFKA_BROKERS", "localhost:19092"), "Comma-separated Kafka broker addresses")
+	topic := flag.String("topic", getEnv("SIGNALS_TOPIC", "trading-signals"), "Kafka topic with analyzer output (indicators + signals)")
+	groupID := flag.String("group", getEnv("CONSUMER_GROUP", ""), "Kafka consumer group ID (empty = unique per gateway instance)")
+	startAt := flag.String("start", getEnv("START_OFFSET", "first"), "Where to start reading: 'first' (replay topic to rebuild history) or 'last' (new results only)")
+	historySize := flag.Int("history", 500, "Windows kept in memory per symbol")
 	flag.Parse()
 
 	log.Println("=========================================================")
@@ -41,11 +34,11 @@ func main() {
 	log.Printf("Listening Port:     %s", *port)
 	log.Printf("Kafka Brokers:      %s", *brokersStr)
 	log.Printf("Signals Topic:      %s", *topic)
-	log.Printf("Mock Generator:     %t", *enableMock)
+	log.Printf("Start Offset:       %s", *startAt)
 	log.Println("---------------------------------------------------------")
 
-	// 2. Initialize In-Memory Store and WebSocket Hub
-	memStore := store.NewMemoryStore(500, 200)
+	// 2. In-memory store and WebSocket hub
+	memStore := store.NewMemoryStore(*historySize, 500)
 	hub := server.NewHub(memStore)
 	go hub.Run()
 
@@ -53,29 +46,22 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// 4. Start Mock Generator if requested
-	if *enableMock {
-		log.Println("[Gateway] Mock generator active. Simulating DEBS 2022 market ticks...")
-		go mock.StartMockGenerator(ctx, hub, time.Duration(*mockIntervalMs)*time.Millisecond)
-	}
-
-	// 5. Start Kafka Signal Consumer
-	brokers := splitAndTrim(*brokersStr)
-	consumerCfg := kafka.ConsumerConfig{
-		Brokers: brokers,
+	// 4. Kafka consumer for the analyzer output
+	consumer := kafka.NewSignalConsumer(kafka.ConsumerConfig{
+		Brokers: splitAndTrim(*brokersStr),
 		Topic:   *topic,
 		GroupID: *groupID,
-	}
-	consumer := kafka.NewSignalConsumer(consumerCfg, hub)
+		StartAt: *startAt,
+	}, hub)
 	go consumer.Start(ctx)
 
-	// 6. Start HTTP & WebSocket Server
+	// 5. HTTP & WebSocket server
 	srv := server.NewServer(hub, memStore)
+	srv.ConsumerStats = func() any { return consumer.Stats() }
 	httpServer := &http.Server{
-		Handler:      srv.Handler(),
-		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 15 * time.Second,
-		IdleTimeout:  60 * time.Second,
+		Handler:     srv.Handler(),
+		ReadTimeout: 15 * time.Second,
+		IdleTimeout: 60 * time.Second,
 	}
 
 	listener, err := net.Listen("tcp", fmt.Sprintf(":%s", *port))
@@ -89,19 +75,19 @@ func main() {
 	}
 
 	go func() {
-		log.Printf("[Gateway] HTTP API & WebSocket ready at http://localhost:%s (WS: ws://localhost:%s/ws)", *port, *port)
+		log.Printf("[Gateway] Dashboard: http://localhost:%s  (WebSocket: ws://localhost:%s/ws)", *port, *port)
 		if err := httpServer.Serve(listener); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("[Gateway] Server failed: %v", err)
 		}
 	}()
 
-	// 7. Wait for termination signals (Ctrl+C, Docker stop)
+	// 6. Wait for termination signals (Ctrl+C, Docker stop)
 	stopSig := make(chan os.Signal, 1)
 	signal.Notify(stopSig, os.Interrupt, syscall.SIGTERM)
 	<-stopSig
 
-	log.Println("\n[Gateway] Shutting down gracefully...")
-	cancel() // Cancel background consumer and mock goroutines
+	log.Println("[Gateway] Shutting down gracefully...")
+	cancel()
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()
@@ -121,14 +107,6 @@ func getEnv(key, defaultVal string) string {
 		return val
 	}
 	return defaultVal
-}
-
-func getEnvBool(key string, defaultVal bool) bool {
-	val := os.Getenv(key)
-	if val == "" {
-		return defaultVal
-	}
-	return strings.ToLower(val) == "true" || val == "1"
 }
 
 func splitAndTrim(s string) []string {
