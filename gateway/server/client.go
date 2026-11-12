@@ -35,7 +35,7 @@ func NewClient(hub *Hub, conn *websocket.Conn) *Client {
 	return &Client{
 		hub:           hub,
 		conn:          conn,
-		send:          make(chan []byte, 512),
+		send:          make(chan []byte, 2048),
 		id:            fmt.Sprintf("client-%d", time.Now().UnixNano()),
 		subscriptions: make(map[string]bool),
 		subscribeAll:  false,
@@ -171,6 +171,9 @@ func (c *Client) handleIncomingMessage(raw []byte) {
 		})
 		c.Send(msg)
 
+	case "get_markets":
+		c.hub.sendWelcome(c)
+
 	case "ping":
 		msg, _ := json.Marshal(model.WSServerMessage{
 			Type:      "pong",
@@ -184,7 +187,7 @@ func (c *Client) handleIncomingMessage(raw []byte) {
 }
 
 func (c *Client) sendSymbolHistory(symbol string) {
-	history := c.hub.store.GetHistory(symbol, 200)
+	history := c.hub.store.GetHistory(symbol, 500)
 	msg, err := json.Marshal(model.WSServerMessage{
 		Type:      "history",
 		Symbol:    symbol,

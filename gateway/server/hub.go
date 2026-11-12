@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"trading-trends/gateway/model"
@@ -11,13 +12,21 @@ import (
 )
 
 // Hub maintains the set of active clients and broadcasts filtered messages.
+//
+// Routing rules:
+//   - indicator (one per symbol per closed window): stored as a chart point
+//     and sent as type "signal" only to clients subscribed to that symbol.
+//   - BUY/SELL advisory (from a "signal" message, or the signal field of an
+//     indicator): stored once (deduplicated) and sent as type "alert" to
+//     every client. Warm-up advisories (first window, EMAs start at 0) are
+//     stored and counted but not pushed live.
 type Hub struct {
 	store *store.MemoryStore
 
 	// Registered clients
 	clients map[*Client]bool
 
-	// Inbound messages from Kafka / Mock
+	// Inbound messages from Kafka
 	broadcast chan model.SignalEvent
 
 	// Register / Unregister requests
@@ -25,6 +34,19 @@ type Hub struct {
 	unregister chan *Client
 
 	mu sync.RWMutex
+
+	indicators atomic.Int64 // indicator messages processed
+	advisories atomic.Int64 // distinct advisories processed
+	dropped    atomic.Int64 // client messages dropped because a client was too slow
+}
+
+// HubStats are counters for the debug panel.
+type HubStats struct {
+	Indicators      int64 `json:"indicators"`
+	Advisories      int64 `json:"advisories"`
+	DroppedMessages int64 `json:"dropped_client_messages"`
+	QueueLength     int   `json:"queue_length"`
+	QueueCapacity   int   `json:"queue_capacity"`
 }
 
 // NewHub initializes a new Hub.
@@ -32,7 +54,7 @@ func NewHub(st *store.MemoryStore) *Hub {
 	return &Hub{
 		store:      st,
 		clients:    make(map[*Client]bool),
-		broadcast:  make(chan model.SignalEvent, 2048),
+		broadcast:  make(chan model.SignalEvent, 4096),
 		register:   make(chan *Client),
 		unregister: make(chan *Client),
 	}
@@ -45,11 +67,10 @@ func (h *Hub) Run() {
 		case client := <-h.register:
 			h.mu.Lock()
 			h.clients[client] = true
+			n := len(h.clients)
 			h.mu.Unlock()
 
-			log.Printf("[Hub] Client connected: %s (Total: %d)", client.id, len(h.clients))
-
-			// Send welcome state to client: available symbols & stats & recent alerts
+			log.Printf("[Hub] Client connected: %s (Total: %d)", client.id, n)
 			h.sendWelcome(client)
 
 		case client := <-h.unregister:
@@ -62,60 +83,80 @@ func (h *Hub) Run() {
 			h.mu.Unlock()
 
 		case event := <-h.broadcast:
-			// Save in memory store
-			h.store.AddSignal(event)
-
-			// Prepare JSON payloads
-			signalMsg, _ := json.Marshal(model.WSServerMessage{
-				Type:      "signal",
-				Symbol:    event.Symbol,
-				Data:      event,
-				Timestamp: time.Now().UTC(),
-			})
-
-			var alertMsg []byte
-			if event.Signal == "BUY" || event.Signal == "SELL" {
-				alertMsg, _ = json.Marshal(model.WSServerMessage{
-					Type:      "alert",
-					Symbol:    event.Symbol,
-					Data:      event,
-					Timestamp: time.Now().UTC(),
-				})
-			}
-
-			// Broadcast according to client subscriptions
-			h.mu.RLock()
-			for client := range h.clients {
-				isSubscribed := client.IsSubscribed(event.Symbol)
-
-				if isSubscribed {
-					select {
-					case client.send <- signalMsg:
-					default:
-						// Slow client, drop or disconnect
-					}
-				}
-
-				// If there's a BUY/SELL alert, deliver to all clients for global alert feed
-				if alertMsg != nil && !isSubscribed {
-					select {
-					case client.send <- alertMsg:
-					default:
-					}
-				}
-			}
-			h.mu.RUnlock()
+			h.process(event)
 		}
 	}
 }
 
-// Broadcast sends a SignalEvent to the Hub for distribution.
-func (h *Hub) Broadcast(event model.SignalEvent) {
-	select {
-	case h.broadcast <- event:
-	default:
-		log.Printf("[Hub] Warning: broadcast queue full, dropping event for %s", event.Symbol)
+func (h *Hub) process(event model.SignalEvent) {
+	if event.Symbol == "" {
+		return
 	}
+
+	if event.Kind != model.KindSignal {
+		// Indicator (or a legacy message without kind): one chart point.
+		h.indicators.Add(1)
+		h.store.AddIndicator(event)
+		h.sendToSubscribers(event.Symbol, h.encode("signal", event))
+	}
+
+	if event.IsAlert() && h.store.AddAlert(event) {
+		h.advisories.Add(1)
+		h.sendToAll(h.encode("alert", event))
+	}
+}
+
+func (h *Hub) encode(msgType string, event model.SignalEvent) []byte {
+	b, err := json.Marshal(model.WSServerMessage{
+		Type:      msgType,
+		Symbol:    event.Symbol,
+		Data:      event,
+		Timestamp: time.Now().UTC(),
+	})
+	if err != nil {
+		log.Printf("[Hub] encode error: %v", err)
+		return nil
+	}
+	return b
+}
+
+func (h *Hub) sendToSubscribers(symbol string, msg []byte) {
+	if msg == nil {
+		return
+	}
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	for client := range h.clients {
+		if client.IsSubscribed(symbol) {
+			h.trySend(client, msg)
+		}
+	}
+}
+
+func (h *Hub) sendToAll(msg []byte) {
+	if msg == nil {
+		return
+	}
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	for client := range h.clients {
+		h.trySend(client, msg)
+	}
+}
+
+func (h *Hub) trySend(client *Client, msg []byte) {
+	select {
+	case client.send <- msg:
+	default:
+		h.dropped.Add(1) // slow client: drop rather than stall the pipeline
+	}
+}
+
+// Broadcast hands an event to the Hub. It blocks while the hub queue is
+// full, which applies back-pressure to the Kafka consumer instead of
+// silently losing chart points.
+func (h *Hub) Broadcast(event model.SignalEvent) {
+	h.broadcast <- event
 }
 
 // ClientCount returns the number of connected clients.
@@ -125,15 +166,23 @@ func (h *Hub) ClientCount() int {
 	return len(h.clients)
 }
 
-func (h *Hub) sendWelcome(client *Client) {
-	symbols := h.store.GetSymbols()
-	stats := h.store.GetStats()
-	recentAlerts := h.store.GetLatestAlerts(20)
+// Stats returns hub counters.
+func (h *Hub) Stats() HubStats {
+	return HubStats{
+		Indicators:      h.indicators.Load(),
+		Advisories:      h.advisories.Load(),
+		DroppedMessages: h.dropped.Load(),
+		QueueLength:     len(h.broadcast),
+		QueueCapacity:   cap(h.broadcast),
+	}
+}
 
+func (h *Hub) sendWelcome(client *Client) {
 	welcomePayload := map[string]interface{}{
-		"symbols":       symbols,
-		"stats":         stats,
-		"recent_alerts": recentAlerts,
+		"symbols":       h.store.GetSymbols(),
+		"markets":       h.store.GetMarkets(250),
+		"stats":         h.store.GetStats(),
+		"recent_alerts": h.store.GetAlerts(50, true),
 		"client_id":     client.id,
 	}
 

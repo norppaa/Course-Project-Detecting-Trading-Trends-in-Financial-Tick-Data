@@ -18,7 +18,7 @@ var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024 * 64,
 	WriteBufferSize: 1024 * 64,
 	CheckOrigin: func(r *http.Request) bool {
-		// Allow all origins for dev/dashboard flexibility
+		// Allow all origins (the dashboard may be served by nginx on another port)
 		return true
 	},
 }
@@ -28,6 +28,8 @@ type Server struct {
 	hub       *Hub
 	store     *store.MemoryStore
 	startTime time.Time
+	// ConsumerStats, if set, is included in /api/stats.
+	ConsumerStats func() any
 }
 
 // NewServer initializes a new Server.
@@ -50,15 +52,16 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/health", s.handleHealth)
 	mux.HandleFunc("/api/stats", s.handleStats)
 	mux.HandleFunc("/api/symbols", s.handleSymbols)
+	mux.HandleFunc("/api/markets", s.handleMarkets)
 	mux.HandleFunc("/api/history", s.handleHistory)
 	mux.HandleFunc("/api/alerts", s.handleAlerts)
 	mux.HandleFunc("/api/snapshot", s.handleSnapshot)
 
-	// Static frontend file server (searches local directory or parent directory)
+	// Static frontend file server
 	staticDir := s.resolveStaticDir()
 	if staticDir != "" {
 		fs := http.FileServer(http.Dir(staticDir))
-		mux.Handle("/", fs)
+		mux.Handle("/", noCache(fs))
 		log.Printf("[Server] Serving static dashboard from %s", staticDir)
 	} else {
 		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -70,10 +73,20 @@ func (s *Server) Handler() http.Handler {
 	return s.withCORS(mux)
 }
 
+// noCache makes browsers revalidate the dashboard files on every load so a
+// changed app.js / index.html is picked up without a hard refresh.
+func noCache(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-cache, must-revalidate")
+		next.ServeHTTP(w, r)
+	})
+}
+
 func (s *Server) resolveStaticDir() string {
 	candidates := []string{
 		"./frontend",
 		"../frontend",
+		"/app/frontend",
 		"/frontend",
 		"/usr/share/nginx/html",
 	}
@@ -122,18 +135,25 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
-	stats := s.store.GetStats()
-	s.writeJSON(w, http.StatusOK, map[string]interface{}{
-		"store_stats":    stats,
+	resp := map[string]interface{}{
+		"store_stats":    s.store.GetStats(),
+		"hub_stats":      s.hub.Stats(),
 		"active_clients": s.hub.ClientCount(),
 		"uptime_seconds": time.Since(s.startTime).Seconds(),
 		"timestamp":      time.Now().UTC(),
-	})
+	}
+	if s.ConsumerStats != nil {
+		resp["consumer_stats"] = s.ConsumerStats()
+	}
+	s.writeJSON(w, http.StatusOK, resp)
 }
 
 func (s *Server) handleSymbols(w http.ResponseWriter, r *http.Request) {
-	symbols := s.store.GetSymbols()
-	s.writeJSON(w, http.StatusOK, symbols)
+	s.writeJSON(w, http.StatusOK, s.store.GetSymbols())
+}
+
+func (s *Server) handleMarkets(w http.ResponseWriter, r *http.Request) {
+	s.writeJSON(w, http.StatusOK, s.store.GetMarkets(queryInt(r, "limit", 0)))
 }
 
 func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
@@ -142,37 +162,35 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing 'symbol' parameter", http.StatusBadRequest)
 		return
 	}
-
-	limit := 200
-	if lStr := r.URL.Query().Get("limit"); lStr != "" {
-		if l, err := strconv.Atoi(lStr); err == nil && l > 0 {
-			limit = l
-		}
-	}
-
-	history := s.store.GetHistory(symbol, limit)
-	s.writeJSON(w, http.StatusOK, history)
+	s.writeJSON(w, http.StatusOK, s.store.GetHistory(symbol, queryInt(r, "limit", 200)))
 }
 
 func (s *Server) handleAlerts(w http.ResponseWriter, r *http.Request) {
-	limit := 50
-	if lStr := r.URL.Query().Get("limit"); lStr != "" {
-		if l, err := strconv.Atoi(lStr); err == nil && l > 0 {
-			limit = l
+	warmup := true
+	if v := r.URL.Query().Get("warmup"); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			warmup = b
 		}
 	}
-
-	alerts := s.store.GetLatestAlerts(limit)
-	s.writeJSON(w, http.StatusOK, alerts)
+	s.writeJSON(w, http.StatusOK, s.store.GetAlerts(queryInt(r, "limit", 50), warmup))
 }
 
 func (s *Server) handleSnapshot(w http.ResponseWriter, r *http.Request) {
-	snapshot := s.store.GetSnapshot()
-	s.writeJSON(w, http.StatusOK, snapshot)
+	s.writeJSON(w, http.StatusOK, s.store.GetSnapshot())
+}
+
+func queryInt(r *http.Request, key string, def int) int {
+	if v := r.URL.Query().Get(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return def
 }
 
 func (s *Server) writeJSON(w http.ResponseWriter, statusCode int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(statusCode)
 	_ = json.NewEncoder(w).Encode(data)
 }

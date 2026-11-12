@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http/httptest"
 	"strings"
@@ -12,6 +13,51 @@ import (
 	"trading-trends/gateway/store"
 )
 
+// startReader reads frames in the background (a gorilla connection cannot
+// be read again after a read timeout). The write pump may pack several
+// messages into one frame separated by '\n'.
+func startReader(t *testing.T, conn *websocket.Conn) <-chan model.WSServerMessage {
+	ch := make(chan model.WSServerMessage, 256)
+	go func() {
+		defer close(ch)
+		for {
+			_, frame, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			for _, line := range bytes.Split(frame, []byte{'\n'}) {
+				if len(bytes.TrimSpace(line)) == 0 {
+					continue
+				}
+				var m model.WSServerMessage
+				if err := json.Unmarshal(line, &m); err != nil {
+					t.Errorf("bad message %q: %v", line, err)
+					return
+				}
+				ch <- m
+			}
+		}
+	}()
+	return ch
+}
+
+// collect returns every message that arrives within d.
+func collect(ch <-chan model.WSServerMessage, d time.Duration) []model.WSServerMessage {
+	var out []model.WSServerMessage
+	timeout := time.After(d)
+	for {
+		select {
+		case m, ok := <-ch:
+			if !ok {
+				return out
+			}
+			out = append(out, m)
+		case <-timeout:
+			return out
+		}
+	}
+}
+
 func TestWebSocketSubscriptionAndBroadcast(t *testing.T) {
 	st := store.NewMemoryStore(100, 50)
 	hub := NewHub(st)
@@ -21,80 +67,76 @@ func TestWebSocketSubscriptionAndBroadcast(t *testing.T) {
 	server := httptest.NewServer(s.Handler())
 	defer server.Close()
 
-	// Convert http:// to ws://
 	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/ws"
-
-	// Connect client
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
 		t.Fatalf("Failed to connect to WebSocket: %v", err)
 	}
 	defer conn.Close()
 
-	// 1. First message should be the welcome / info message
-	_, msg, err := conn.ReadMessage()
-	if err != nil {
-		t.Fatalf("Failed to read welcome message: %v", err)
-	}
-	var welcome model.WSServerMessage
-	if err := json.Unmarshal(msg, &welcome); err != nil || welcome.Type != "info" {
-		t.Fatalf("Expected welcome info message, got: %s", string(msg))
+	ch := startReader(t, conn)
+
+	// 1. Welcome message
+	msgs := collect(ch, 200*time.Millisecond)
+	if len(msgs) != 1 || msgs[0].Type != "info" {
+		t.Fatalf("expected one info message, got %+v", msgs)
 	}
 
-	// 2. Send subscription message for "BMW.ETR"
-	subMsg := model.WSClientMessage{
-		Action:  "subscribe",
-		Symbols: []string{"BMW.ETR"},
-	}
-	subBytes, _ := json.Marshal(subMsg)
+	// 2. Subscribe -> history
+	subBytes, _ := json.Marshal(model.WSClientMessage{Action: "subscribe", Symbols: []string{"BMW.ETR"}})
 	if err := conn.WriteMessage(websocket.TextMessage, subBytes); err != nil {
 		t.Fatalf("Failed to send subscribe message: %v", err)
 	}
-
-	// Read history response for BMW.ETR
-	_, msg, err = conn.ReadMessage()
-	if err != nil {
-		t.Fatalf("Failed to read history response: %v", err)
-	}
-	var histMsg model.WSServerMessage
-	if err := json.Unmarshal(msg, &histMsg); err != nil || histMsg.Type != "history" {
-		t.Fatalf("Expected history message, got: %s", string(msg))
+	msgs = collect(ch, 200*time.Millisecond)
+	if len(msgs) != 1 || msgs[0].Type != "history" || msgs[0].Symbol != "BMW.ETR" {
+		t.Fatalf("expected history for BMW.ETR, got %+v", msgs)
 	}
 
-	// 3. Broadcast an event for an unsubscribed symbol ("RDSA.NL") -> should NOT be received as a signal
-	hub.Broadcast(model.SignalEvent{
-		Symbol:    "RDSA.NL",
-		Close:     20.0,
-		EMA38:     19.9,
-		EMA100:    19.8,
-		Timestamp: time.Now().UTC(),
-	})
+	end := time.Date(2021, 11, 8, 10, 0, 0, 0, time.UTC)
 
-	// 4. Broadcast an event for the subscribed symbol ("BMW.ETR")
-	now := time.Now().UTC()
-	hub.Broadcast(model.SignalEvent{
-		Symbol:    "BMW.ETR",
-		Close:     88.5,
-		EMA38:     88.2,
-		EMA100:    88.0,
-		Signal:    "BUY",
-		Timestamp: now,
-	})
+	// 3. Indicator for an unsubscribed symbol: no chart update.
+	hub.Broadcast(model.SignalEvent{Kind: model.KindIndicator, Symbol: "RDSA.NL", Close: 20, EMA38: 19.9, EMA100: 19.8, WindowEnd: end, Timestamp: end})
 
-	// Read signal message
-	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
-	_, msg, err = conn.ReadMessage()
-	if err != nil {
-		t.Fatalf("Failed to read broadcast message: %v", err)
+	// 4. Crossover on the subscribed symbol, reported twice like the
+	//    analyzer does (indicator with signal field + signal message).
+	ind := model.SignalEvent{Kind: model.KindIndicator, Symbol: "BMW.ETR", Close: 88.5, EMA38: 88.2, EMA100: 88.0, Signal: "BUY", WindowEnd: end, Timestamp: end}
+	sig := ind
+	sig.Kind = model.KindSignal
+	hub.Broadcast(ind)
+	hub.Broadcast(sig)
+
+	// 5. Warm-up BUY of another symbol: stored and pushed with FirstWindow=true.
+	hub.Broadcast(model.SignalEvent{Kind: model.KindSignal, Symbol: "X.FR", Close: 1, Signal: "BUY", FirstWindow: true, WindowEnd: end, Timestamp: end})
+
+	msgs = collect(ch, 200*time.Millisecond)
+	var signals, realAlerts, warmupAlerts int
+	for _, m := range msgs {
+		switch m.Type {
+		case "signal":
+			signals++
+			if m.Symbol != "BMW.ETR" {
+				t.Fatalf("received chart update for unsubscribed %s", m.Symbol)
+			}
+		case "alert":
+			switch m.Symbol {
+			case "BMW.ETR":
+				realAlerts++
+			case "X.FR":
+				warmupAlerts++
+			default:
+				t.Fatalf("unexpected alert for %s", m.Symbol)
+			}
+		}
 	}
-	var broadcastMsg model.WSServerMessage
-	if err := json.Unmarshal(msg, &broadcastMsg); err != nil {
-		t.Fatalf("Failed to parse broadcast message: %v", err)
+	if signals != 1 || realAlerts != 1 || warmupAlerts != 1 {
+		t.Fatalf("expected 1 signal, 1 real alert, 1 warm-up alert; got %d, %d, %d: %+v", signals, realAlerts, warmupAlerts, msgs)
 	}
-	if broadcastMsg.Symbol != "BMW.ETR" {
-		t.Fatalf("Expected BMW.ETR, got %s", broadcastMsg.Symbol)
+
+	stats := st.GetStats()
+	if stats.TotalSignals != 2 || stats.TotalBuyAlerts != 1 || stats.WarmupAlerts != 1 {
+		t.Fatalf("unexpected store stats: %+v", stats)
 	}
-	if broadcastMsg.Type != "signal" {
-		t.Fatalf("Expected signal type, got %s", broadcastMsg.Type)
+	if h := st.GetHistory("BMW.ETR", 0); len(h) != 1 {
+		t.Fatalf("signal message must not add a chart point, history=%d", len(h))
 	}
 }
