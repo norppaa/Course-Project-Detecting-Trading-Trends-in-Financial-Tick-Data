@@ -2,3 +2,6 @@
 #Ignore large dataset files
 data/*.csv          
 data/*.csv.gz
+
+# Benchmark output
+results/

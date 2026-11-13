@@ -21,7 +21,7 @@ docker compose up -d
 # Create a cleaned input file, if you don't have one yet
 go run ./scripts/clean_data.go \
     -input data/debs2022-gc-trading-day-08-11-21.csv \
-    -output data/trades_08-11-21.csv -only-trades
+    -output data/trades_only_08-11-21.csv -only-trades
 ```
 
 Run every command from the repository root. Use an uncompressed `.csv` as input, because reading gzip can limit the producer.
@@ -43,13 +43,13 @@ Settings go before the command, and the argument is the experiment name, which b
 **Latency at a fixed rate, also checking the results against the offline tool:**
 
 ```bash
-INPUT=data/trades_08-11-21.csv RATE=50000 COMPARE=1 bench/run.sh latency-50k
+INPUT=data/trades_only_08-11-21.csv RATE=50000 COMPARE=1 bench/run.sh latency-50k
 ```
 
 **Maximum throughput:**
 
 ```bash
-INPUT=data/trades_08-11-21.csv MODE=max bench/run.sh max-throughput
+INPUT=data/trades_only_08-11-21.csv MODE=max bench/run.sh max-throughput
 ```
 
 Use `MODE=max` for throughput only. Its latency numbers mostly measure queueing.
@@ -57,14 +57,14 @@ Use `MODE=max` for throughput only. Its latency numbers mostly measure queueing.
 **Replay at 10× historical speed:**
 
 ```bash
-INPUT=data/trades_08-11-21.csv MODE=realtime SPEED=10 bench/run.sh realtime-10x
+INPUT=data/trades_only_08-11-21.csv MODE=realtime SPEED=10 bench/run.sh realtime-10x
 ```
 
 **Finding the maximum sustainable throughput.** Raise the rate until the summary says `NOT sustainable`. The highest rate that passes is your result.
 
 ```bash
 for rate in 25000 50000 100000 200000; do
-    INPUT=data/trades_08-11-21.csv RATE=$rate bench/run.sh rate-sweep
+    INPUT=data/trades_only_08-11-21.csv RATE=$rate bench/run.sh rate-sweep
 done
 ```
 
@@ -80,7 +80,7 @@ Redpanda is not pinned by these settings, so it can still use any core allowed t
 **A single exchange.** Filter the input by symbol suffix (`.FR`, `.NL` or `.ETR`):
 
 ```bash
-{ head -n 1 data/trades_08-11-21.csv; grep -E '^[^,]*\.FR,' data/trades_08-11-21.csv; } > data/trades_FR.csv
+{ head -n 1 data/trades_only_08-11-21.csv; grep -E '^[^,]*\.FR,' data/trades_only_08-11-21.csv; } > data/trades_FR.csv
 INPUT=data/trades_FR.csv RATE=50000 bench/run.sh exchange-FR
 ```
 

@@ -22,7 +22,7 @@ analyzer/
 ```bash
 docker compose up -d                       # Redpanda
 go run ./analyzer                          # analyzer, joins group "stream-analyzer"
-go run ./producer -input data/trades_08-11-21.csv
+go run ./producer -input data/trades_only_08-11-21.csv
 ```
 
 or everything in Docker: `docker compose --profile app up -d --build`.
@@ -116,11 +116,11 @@ symbols happens in the gateway.
 # Clean a raw day file (only trade events)
 go run ./scripts/clean_data.go \
     -input data/debs2022-gc-trading-day-08-11-21.csv \
-    -output data/trades_08-11-21.csv -only-trades
+    -output data/trades_only_08-11-21.csv -only-trades
 
 # Run the analyzer on it
 go run ./analyzer/cmd/offline \
-    -input data/trades_08-11-21.csv \
+    -input data/trades_only_08-11-21.csv \
     -output data/results_08-11-21.csv
 ```
 
