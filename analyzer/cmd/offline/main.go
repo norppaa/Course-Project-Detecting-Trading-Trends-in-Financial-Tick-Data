@@ -10,7 +10,7 @@
 //
 // Example:
 //
-//	go run ./analyzer/cmd/offline -input data/trades_08-11-21.csv \
+//	go run ./analyzer/cmd/offline -input data/trades_only_08-11-21.csv \
 //	    -output data/results_08-11-21.csv -grace 5s
 package main
 
