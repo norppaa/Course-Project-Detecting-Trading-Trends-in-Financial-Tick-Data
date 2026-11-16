@@ -15,7 +15,7 @@ func TestMaxSpeedPacer(t *testing.T) {
 	tick := &models.MarketTick{ID: "AAPL"}
 	start := time.Now()
 	for i := 0; i < 1000; i++ {
-		if err := p.Wait(ctx, tick); err != nil {
+		if err := p.Wait(ctx, tick, nil); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	}
@@ -37,7 +37,7 @@ func TestFixedRatePacer(t *testing.T) {
 
 	start := time.Now()
 	for i := 0; i < 100; i++ {
-		if err := p.Wait(ctx, tick); err != nil {
+		if err := p.Wait(ctx, tick, nil); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	}
@@ -64,10 +64,10 @@ func TestSimulatedRealtimePacer(t *testing.T) {
 	tick2 := &models.MarketTick{ID: "AAPL", Timestamp: baseTime.Add(10 * time.Second)}
 
 	start := time.Now()
-	if err := p.Wait(ctx, tick1); err != nil {
+	if err := p.Wait(ctx, tick1, nil); err != nil {
 		t.Fatalf("tick1 wait error: %v", err)
 	}
-	if err := p.Wait(ctx, tick2); err != nil {
+	if err := p.Wait(ctx, tick2, nil); err != nil {
 		t.Fatalf("tick2 wait error: %v", err)
 	}
 	elapsed := time.Since(start)
@@ -91,7 +91,7 @@ func TestSimulatedRealtimePacerDoesNotDrift(t *testing.T) {
 	start := time.Now()
 	for i := 0; i <= 200; i++ {
 		tick := &models.MarketTick{ID: "AAPL", Timestamp: baseTime.Add(time.Duration(i) * 50 * time.Millisecond)}
-		if err := p.Wait(ctx, tick); err != nil {
+		if err := p.Wait(ctx, tick, nil); err != nil {
 			t.Fatalf("wait error: %v", err)
 		}
 	}
@@ -110,11 +110,42 @@ func TestPacerStopsOnCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	tick := &models.MarketTick{ID: "AAPL"}
 
-	if err := p.Wait(ctx, tick); err != nil {
+	if err := p.Wait(ctx, tick, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	cancel()
-	if err := p.Wait(ctx, tick); err == nil {
+	if err := p.Wait(ctx, tick, nil); err == nil {
 		t.Fatal("expected error after cancel")
+	}
+}
+
+// beforeSleep must run before every real sleep, so collected ticks are sent
+// instead of waiting in the producer, and never when the pacer does not sleep.
+func TestPacerCallsBeforeSleep(t *testing.T) {
+	ctx := context.Background()
+	tick := &models.MarketTick{ID: "AAPL"}
+
+	p, err := NewFixedRatePacer(100) // checks the clock on every tick, 10 ms apart
+	if err != nil {
+		t.Fatalf("failed to create pacer: %v", err)
+	}
+	calls := 0
+	for i := 0; i < 5; i++ {
+		if err := p.Wait(ctx, tick, func() { calls++ }); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+	if calls != 5 {
+		t.Errorf("rate pacer: beforeSleep called %d times, want 5", calls)
+	}
+
+	calls = 0
+	for i := 0; i < 100; i++ {
+		if err := NewMaxSpeedPacer().Wait(ctx, tick, func() { calls++ }); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+	if calls != 0 {
+		t.Errorf("max pacer: beforeSleep called %d times, want 0", calls)
 	}
 }

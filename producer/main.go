@@ -15,6 +15,9 @@ import (
 	"trading-trends/pkg/models"
 )
 
+// pacedChunkSize is the largest chunk sent at once in the rate and realtime modes.
+const pacedChunkSize = 256
+
 func main() {
 	cfg, err := LoadConfig(os.Args[1:])
 	if errors.Is(err, flag.ErrHelp) {
@@ -97,14 +100,20 @@ func main() {
 
 	log.Println("[Producer] Streaming started...")
 
-	// In max mode ticks are handed to Kafka in chunks, which cuts per-call overhead.
-	// Paced modes send each tick immediately so it never waits behind a sleep.
-	chunkSize := 1
-	if cfg.ReplayMode == "max" {
-		chunkSize = cfg.BatchSize
+	// Ticks are handed to Kafka in chunks, which cuts the per-call overhead
+	// (one WriteMessages call and one produced_at timestamp per chunk).
+	// Paced modes use small chunks and send them before every sleep, so a tick
+	// waits in the producer only while the next ones are read (well under 1 ms).
+	// produced_at is set when the chunk is sent, so that wait is not measured.
+	chunkSize := cfg.BatchSize
+	if cfg.ReplayMode != "max" {
+		chunkSize = min(cfg.BatchSize, pacedChunkSize)
 	}
 	pending := make([]*models.MarketTick, 0, chunkSize)
 	publishPending := func() {
+		if len(pending) == 0 {
+			return
+		}
 		if err := publisher.Publish(ctx, pending...); err != nil {
 			log.Printf("[Producer] Publish error: %v", err)
 		}
@@ -138,7 +147,7 @@ func main() {
 			break
 		}
 
-		if err := pacer.Wait(ctx, tick); err != nil {
+		if err := pacer.Wait(ctx, tick, publishPending); err != nil {
 			log.Println("[Producer] Shutdown signal received, stopping...")
 			completed = false
 			break

@@ -9,8 +9,10 @@ import (
 )
 
 // Pacer controls the rate at which ticks are dispatched to the message broker.
+// Wait calls beforeSleep (if not nil) right before it actually sleeps, so the
+// caller can send the ticks it has collected instead of holding them while idle.
 type Pacer interface {
-	Wait(ctx context.Context, tick *models.MarketTick) error
+	Wait(ctx context.Context, tick *models.MarketTick, beforeSleep func()) error
 }
 
 // newPacer builds the pacer for the configured replay mode.
@@ -28,9 +30,15 @@ func newPacer(cfg *Config) (Pacer, error) {
 // sleepUntil blocks until the wall-clock deadline or until ctx is cancelled.
 // Waits shorter than a millisecond are skipped; because pacers schedule against
 // a fixed start time, skipped time is made up on later ticks rather than lost.
-func sleepUntil(ctx context.Context, deadline time.Time) error {
+func sleepUntil(ctx context.Context, deadline time.Time, beforeSleep func()) error {
+	if time.Until(deadline) < time.Millisecond {
+		return ctx.Err()
+	}
+	if beforeSleep != nil {
+		beforeSleep()
+	}
 	d := time.Until(deadline)
-	if d < time.Millisecond {
+	if d <= 0 {
 		return ctx.Err()
 	}
 	timer := time.NewTimer(d)
@@ -50,7 +58,7 @@ func NewMaxSpeedPacer() *MaxSpeedPacer {
 	return &MaxSpeedPacer{}
 }
 
-func (p *MaxSpeedPacer) Wait(ctx context.Context, _ *models.MarketTick) error {
+func (p *MaxSpeedPacer) Wait(ctx context.Context, _ *models.MarketTick, _ func()) error {
 	return ctx.Err()
 }
 
@@ -73,7 +81,7 @@ func NewFixedRatePacer(rate int) (*FixedRatePacer, error) {
 	}, nil
 }
 
-func (p *FixedRatePacer) Wait(ctx context.Context, _ *models.MarketTick) error {
+func (p *FixedRatePacer) Wait(ctx context.Context, _ *models.MarketTick, beforeSleep func()) error {
 	if p.startTime.IsZero() {
 		p.startTime = time.Now()
 	}
@@ -82,7 +90,7 @@ func (p *FixedRatePacer) Wait(ctx context.Context, _ *models.MarketTick) error {
 		return ctx.Err()
 	}
 	expected := time.Duration(p.sentCount) * time.Second / time.Duration(p.targetRate)
-	return sleepUntil(ctx, p.startTime.Add(expected))
+	return sleepUntil(ctx, p.startTime.Add(expected), beforeSleep)
 }
 
 // SimulatedRealtimePacer replays events according to their historical timestamp deltas,
@@ -110,7 +118,7 @@ func NewSimulatedRealtimePacer(speedMultiplier float64, maxWaitGap time.Duration
 	}, nil
 }
 
-func (p *SimulatedRealtimePacer) Wait(ctx context.Context, tick *models.MarketTick) error {
+func (p *SimulatedRealtimePacer) Wait(ctx context.Context, tick *models.MarketTick, beforeSleep func()) error {
 	if tick.Timestamp.IsZero() {
 		return ctx.Err()
 	}
@@ -127,5 +135,5 @@ func (p *SimulatedRealtimePacer) Wait(ctx context.Context, tick *models.MarketTi
 	gap := time.Duration(float64(tick.Timestamp.Sub(p.lastEvent)) / p.speedMultiplier)
 	p.wallOffset += min(gap, p.maxWaitGap)
 	p.lastEvent = tick.Timestamp
-	return sleepUntil(ctx, p.wallStart.Add(p.wallOffset))
+	return sleepUntil(ctx, p.wallStart.Add(p.wallOffset), beforeSleep)
 }
