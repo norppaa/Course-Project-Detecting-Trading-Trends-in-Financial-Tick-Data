@@ -54,13 +54,27 @@ INPUT=data/trades_only_08-11-21.csv MODE=max bench/run.sh max-throughput
 
 Use `MODE=max` for throughput only. Its latency numbers mostly measure queueing.
 
+**The analyzer's own maximum throughput (pre-filled topic):** the producer fills the topic first, and the analyzer starts only after it has finished. The analyzer rate in the summary is then not limited by the producer:
+
+```bash
+INPUT=data/trades_only_week.csv PREFILL=1 bench/run.sh e2-drain
+```
+
+Latency in these runs mostly measures how long ticks waited in the topic, so use only the throughput.
+
 **Replay at 10× historical speed:**
 
 ```bash
 INPUT=data/trades_only_08-11-21.csv MODE=realtime SPEED=10 bench/run.sh realtime-10x
 ```
 
-**Finding the maximum sustainable throughput.** Raise the rate until the summary says `NOT sustainable`. The highest rate that passes is your result.
+**Finding the maximum sustainable throughput.** Raise the rate until the summary says `NOT sustainable`. The highest rate that passes is your result. `bench/sweep-rate.sh` runs the whole sweep (5k to 900k ticks/s, 3 repeats each) and writes one summary line per run:
+
+```bash
+bench/sweep-rate.sh | tee results/e3-sweep.log
+```
+
+If the producer reaches less than 98% of the target, the run is marked not sustainable even when the analyzer kept up. Check the lag and the analyzer CPU before blaming the analyzer.
 
 ```bash
 for rate in 25000 50000 100000 200000; do
@@ -68,14 +82,15 @@ for rate in 25000 50000 100000 200000; do
 done
 ```
 
-**Scaling with CPU cores.** Keep the other components on separate cores, and use at least as many partitions as analyzer cores.
+**Scaling with CPU cores.** Use at least as many partitions as analyzer cores. The default layout uses all four P-cores (three for the analyzer, one for Redpanda), so compare 1, 2 and 3 analyzer P-cores and keep the rest unchanged:
 
 ```bash
-RATE=100000 PARTITIONS=8 ANALYZER_CPUS=0-1 PRODUCER_CPUS=2-3 SINK_CPUS=4 bench/run.sh scale-2-cores
-RATE=100000 PARTITIONS=8 ANALYZER_CPUS=0-3 PRODUCER_CPUS=4-5 SINK_CPUS=6 bench/run.sh scale-4-cores
+RATE=100000 PARTITIONS=8 ANALYZER_CPUS=0 bench/run.sh scale-1-core
+RATE=100000 PARTITIONS=8 ANALYZER_CPUS=0-1 bench/run.sh scale-2-cores
+RATE=100000 PARTITIONS=8 ANALYZER_CPUS=0-2 bench/run.sh scale-3-cores
 ```
 
-Redpanda is not pinned by these settings, so it can still use any core allowed to its container.
+Going beyond that means using E-cores, which are slower, so say so in the report or use a bigger machine.
 
 **A single exchange.** Filter the input by symbol suffix (`.FR`, `.NL` or `.ETR`):
 
@@ -92,6 +107,8 @@ for i in 1 2 3; do RATE=50000 bench/run.sh latency-50k; done
 
 ## Settings
 
+The default core layout fits the development laptop (Intel Core Ultra 7 258V): CPUs 0-3 are P-cores and 4-7 are low-power E-cores. The system under test gets the P-cores. Set a CPU setting to an empty string, e.g. `ANALYZER_CPUS=`, to leave that component unpinned. On another machine, check the layout with `lscpu -e` and set all four.
+
 | Setting | Default | Meaning |
 |---|---|---|
 | `INPUT` | `data/trades_cleaned.csv` | Input file |
@@ -103,11 +120,15 @@ for i in 1 2 3; do RATE=50000 bench/run.sh latency-50k; done
 | `POLICY` | `skip` | Empty-window policy: `skip` or `carry` |
 | `HEARTBEAT` | `1s` | Event time between heartbeats, `0` = none |
 | `MAX_TICKS` | `0` | Stop after this many ticks, `0` = whole file |
+| `PREFILL` | `0` | `1` = fill the topic first, then start the analyzer; `MODE` defaults to `max` |
 | `WARMUP` | `30s` | Ignore results from this first part of the run |
 | `P99_LIMIT` | `1s` | End-to-end p99 limit for the "sustainable" verdict |
 | `COMPARE` | `0` | `1` = also run the offline tool and compare results; needs `MAX_TICKS=0` |
 | `SINK_IDLE` | `10s` | After the producer ends, stop once there are no results for this long |
-| `PRODUCER_CPUS`, `ANALYZER_CPUS`, `SINK_CPUS` | | CPU cores to pin each process to, e.g. `0-3` |
+| `ANALYZER_CPUS` | `0-2` | CPU cores for the analyzer (P-cores) |
+| `REDPANDA_CPUS` | `3` | CPU cores for Redpanda (P-core), set with `docker update` |
+| `PRODUCER_CPUS` | `4-6` | CPU cores for the producer (E-cores) |
+| `SINK_CPUS` | `7` | CPU cores for the result sink (E-core) |
 
 ## Reading the summary
 
@@ -144,7 +165,7 @@ If a run is too short for `WARMUP`, no warmup is applied and the summary says so
 | `throughput_series.csv` | Ticks, ticks per second and lag per second |
 | `resources.csv` | CPU and memory per component, per second |
 | `results.csv` | Every window result with its timestamps |
-| `config.env` | Settings, commit, CPU model and Redpanda arguments |
+| `config.env` | Settings, commit, core layout, hardware, power profile, and Go, kafka-go, Docker, Redpanda, kernel and OS versions |
 | `offline.csv` | Offline tool results, with `COMPARE=1` |
 | `*.log` | Output of each component |
 

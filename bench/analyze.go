@@ -106,7 +106,7 @@ func runAnalyze(args []string) error {
 
 	cfg := readConfig(filepath.Join(*dir, "config.env"))
 	fmt.Fprintf(out, "Run: %s\n", *dir)
-	for _, k := range []string{"INPUT", "MODE", "RATE", "SPEED", "PARTITIONS", "GRACE", "POLICY", "HEARTBEAT", "MAX_TICKS"} {
+	for _, k := range []string{"INPUT", "MODE", "RATE", "SPEED", "PARTITIONS", "GRACE", "POLICY", "HEARTBEAT", "MAX_TICKS", "PREFILL"} {
 		fmt.Fprintf(out, "  %-11s %s\n", k, cfg[k])
 	}
 
@@ -126,6 +126,10 @@ func runAnalyze(args []string) error {
 	fmt.Fprintf(out, "\nThroughput\n")
 	fmt.Fprintf(out, "  producer  %.0f ticks/s\n", prod.rate)
 	fmt.Fprintf(out, "  analyzer  %.0f ticks/s while input was flowing\n", ana.ticksPerSecond)
+	prefilled := cfg["PREFILL"] == "1"
+	if prefilled {
+		fmt.Fprintf(out, "  (topic was filled before the analyzer started: this is the analyzer's own read rate)\n")
+	}
 	maxLag := int64(0)
 	for _, s := range ana.samples {
 		maxLag = max(maxLag, s.lag)
@@ -137,6 +141,9 @@ func runAnalyze(args []string) error {
 		return err
 	}
 	fmt.Fprintf(out, "\nLatency, ms (%d results used, first %v ignored: %d)\n", used, effWarmup, skipped)
+	if prefilled {
+		fmt.Fprintf(out, "  NOTE: the topic was filled first, so these mostly measure time spent waiting in it\n")
+	}
 	if effWarmup != *warmup {
 		fmt.Fprintf(out, "  NOTE: run is too short for the %v warmup, so none was applied\n", *warmup)
 	}
