@@ -9,8 +9,7 @@ import (
 	"trading-trends/pkg/models"
 )
 
-// These tests encode messages with the analyzer's own output types so the
-// gateway is checked against the exact wire contract of "trading-signals".
+// These tests encode messages with the analyzer's own output types so the gateway is checked against the exact wire contract of "trading-signals".
 
 func TestDecodeAnalyzerIndicator(t *testing.T) {
 	start := time.Date(2021, 11, 8, 9, 0, 0, 0, time.UTC)

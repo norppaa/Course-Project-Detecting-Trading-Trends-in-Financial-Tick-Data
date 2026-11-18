@@ -84,8 +84,8 @@ func NewMemoryStore(maxPerSymbol, maxAlerts int) *MemoryStore {
 	}
 }
 
-// AddSignal stores a window event and, if it carries a BUY/SELL, records
-// the advisory. Kept for callers that do not distinguish message kinds.
+// AddSignal stores a window event and, if it carries a BUY/SELL, records the advisory.
+// Kept for callers that do not distinguish message kinds.
 func (s *MemoryStore) AddSignal(event model.SignalEvent) {
 	s.AddIndicator(event)
 	if event.IsAlert() {
@@ -123,9 +123,8 @@ func (s *MemoryStore) AddIndicator(event model.SignalEvent) {
 	s.history[event.Symbol] = h
 }
 
-// AddAlert records a BUY/SELL advisory. It returns false if the event is
-// not an advisory or the same advisory (symbol, direction, window) was
-// already recorded.
+// AddAlert records a BUY/SELL advisory.
+// It returns false if the event is not an advisory or the same advisory (symbol, direction, window) was already recorded.
 func (s *MemoryStore) AddAlert(event model.SignalEvent) bool {
 	if event.Symbol == "" || !event.IsAlert() {
 		return false
@@ -232,14 +231,13 @@ func (s *MemoryStore) GetLatest(symbol string) (model.SignalEvent, bool) {
 	return event, ok
 }
 
-// GetLatestAlerts returns the most recent alerts, newest first, including
-// warm-up alerts.
+// GetLatestAlerts returns the most recent alerts, newest first, including warm-up alerts.
 func (s *MemoryStore) GetLatestAlerts(limit int) []model.SignalEvent {
 	return s.GetAlerts(limit, true)
 }
 
-// GetAlerts returns up to limit recent alerts, newest first. Warm-up
-// (first-window) alerts are skipped unless includeWarmup is set.
+// GetAlerts returns up to limit recent alerts, newest first.
+// Warm-up (first-window) alerts are skipped unless includeWarmup is set.
 func (s *MemoryStore) GetAlerts(limit int, includeWarmup bool) []model.SignalEvent {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -273,8 +271,8 @@ func (s *MemoryStore) GetSnapshot() []model.SignalEvent {
 	return snapshot
 }
 
-// GetMarkets returns one summary per symbol that has chart data, most
-// active (most windows) first. limit <= 0 returns all.
+// GetMarkets returns one summary per symbol that has chart data, most active (most windows) first.
+// limit <= 0 returns all.
 func (s *MemoryStore) GetMarkets(limit int) []MarketSummary {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

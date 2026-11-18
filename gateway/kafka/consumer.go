@@ -11,21 +11,17 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/segmentio/kafka-go"
 	"trading-trends/gateway/model"
 	"trading-trends/gateway/server"
+
+	"github.com/segmentio/kafka-go"
 )
 
 // ConsumerConfig holds configuration options for the Kafka signal consumer.
 type ConsumerConfig struct {
 	Brokers []string
 	Topic   string
-	// GroupID of the consumer group. The gateway is a broadcaster: every
-	// instance must see every partition, so each instance should use its own
-	// group. Empty = a unique id per process.
 	GroupID string
-	// StartAt is "last" (only results produced after the gateway started)
-	// or "first" (replay the whole topic to rebuild the chart history).
 	StartAt string
 }
 

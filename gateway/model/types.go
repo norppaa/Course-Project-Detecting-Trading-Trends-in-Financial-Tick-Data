@@ -9,9 +9,6 @@ import (
 	"time"
 )
 
-// Message kinds published by the stream analyzer on "trading-signals"
-// (see pkg/models/tick.go). The kind is sent both as the Kafka header
-// "kind" and as a "kind" field in the JSON body.
 const (
 	KindIndicator = "indicator" // Query 1: one message per (symbol, closed 5-min window)
 	KindSignal    = "signal"    // Query 2: one message per BUY/SELL crossover
@@ -26,9 +23,6 @@ const (
 	alpha100 = 2.0 / (1.0 + 100.0)
 )
 
-// SignalEvent is the gateway's normalized view of one analyzer output message.
-// Indicators (Query 1) and crossover advisories (Query 2) both decode into it;
-// Kind tells them apart.
 type SignalEvent struct {
 	Kind        string    `json:"kind,omitempty"` // "indicator" or "signal" ("" for legacy producers)
 	Symbol      string    `json:"symbol"`
@@ -41,9 +35,6 @@ type SignalEvent struct {
 	EMA38       float64   `json:"ema38"`
 	EMA100      float64   `json:"ema100"`
 	Signal      string    `json:"signal,omitempty"` // "BUY", "SELL" or empty
-	// FirstWindow is true for the symbol's first evaluated window. Because
-	// both EMAs start from 0 (DEBS 2022 spec), that window always satisfies
-	// the bullish crossover rule, so its BUY is a warm-up artefact.
 	FirstWindow bool      `json:"first_window,omitempty"`
 	TradeCount  int       `json:"trade_count,omitempty"`
 	Timestamp   time.Time `json:"timestamp"` // event time of the result (window end)
@@ -58,9 +49,6 @@ func (s *SignalEvent) IsAlert() bool {
 	return s.Signal == "BUY" || s.Signal == "SELL"
 }
 
-// UnmarshalJSON provides flexible decoding of SignalEvent from JSON,
-// tolerating multiple naming styles (e.g. ID, Symbol, Close, Last, price, ema_38, etc.)
-// and various timestamp representations.
 func (s *SignalEvent) UnmarshalJSON(data []byte) error {
 	var raw map[string]interface{}
 	if err := json.Unmarshal(data, &raw); err != nil {
@@ -140,8 +128,6 @@ func (s *SignalEvent) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// isFirstWindow reports whether the EMAs equal the first-window values
-// close*alpha, i.e. the previous EMAs were 0.
 func isFirstWindow(close, ema38, ema100 float64) bool {
 	if close <= 0 {
 		return false

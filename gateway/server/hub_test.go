@@ -8,14 +8,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gorilla/websocket"
 	"trading-trends/gateway/model"
 	"trading-trends/gateway/store"
+
+	"github.com/gorilla/websocket"
 )
 
-// startReader reads frames in the background (a gorilla connection cannot
-// be read again after a read timeout). The write pump may pack several
-// messages into one frame separated by '\n'.
+// startReader reads frames in the background (a gorilla connection cannot be read again after a read timeout).
+// The write pump may pack several messages into one frame separated by '\n'.
 func startReader(t *testing.T, conn *websocket.Conn) <-chan model.WSServerMessage {
 	ch := make(chan model.WSServerMessage, 256)
 	go func() {

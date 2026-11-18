@@ -14,12 +14,9 @@ import (
 // Hub maintains the set of active clients and broadcasts filtered messages.
 //
 // Routing rules:
-//   - indicator (one per symbol per closed window): stored as a chart point
-//     and sent as type "signal" only to clients subscribed to that symbol.
-//   - BUY/SELL advisory (from a "signal" message, or the signal field of an
-//     indicator): stored once (deduplicated) and sent as type "alert" to
-//     every client. Warm-up advisories (first window, EMAs start at 0) are
-//     stored and counted but not pushed live.
+//   - indicator (one per symbol per closed window): stored as a chart point and sent as type "signal" only to clients subscribed to that symbol.
+//   - BUY/SELL advisory (from a "signal" message, or the signal field of an indicator): stored once (deduplicated) and sent as type "alert" to every client.
+//   - Warm-up advisories (first window, EMAs start at 0) are stored and counted but not pushed live.
 type Hub struct {
 	store *store.MemoryStore
 
@@ -152,9 +149,6 @@ func (h *Hub) trySend(client *Client, msg []byte) {
 	}
 }
 
-// Broadcast hands an event to the Hub. It blocks while the hub queue is
-// full, which applies back-pressure to the Kafka consumer instead of
-// silently losing chart points.
 func (h *Hub) Broadcast(event model.SignalEvent) {
 	h.broadcast <- event
 }

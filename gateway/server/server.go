@@ -10,8 +10,9 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/gorilla/websocket"
 	"trading-trends/gateway/store"
+
+	"github.com/gorilla/websocket"
 )
 
 var upgrader = websocket.Upgrader{
@@ -73,8 +74,7 @@ func (s *Server) Handler() http.Handler {
 	return s.withCORS(mux)
 }
 
-// noCache makes browsers revalidate the dashboard files on every load so a
-// changed app.js / index.html is picked up without a hard refresh.
+// noCache makes browsers revalidate the dashboard files on every load so a changed app.js / index.html is picked up without a hard refresh.
 func noCache(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-cache, must-revalidate")
