@@ -13,7 +13,8 @@ The **Data Producer** is responsible for reading raw or preprocessed tick data (
   - `rate`: Fixed message rate (e.g., `10,000` msg/s) for steady-state workload testing.
   - `realtime`: Historical event-time delta replay scaled by a speedup factor (e.g., `10x`, `50x`) for live dashboard visualization.
 - **High-Throughput Batching:** Employs async batching (up to 5,000 messages) with Snappy compression using `kafka-go`.
-- **Heartbeats & End-of-Stream:** Sends control messages to every partition so windows close on quiet partitions, and all remaining windows close when a replay finishes. No end-of-stream is sent if the replay is interrupted, and neither message is sent after a tick has failed. The topic must exist: at startup the producer waits up to about 30 s for it and then exits.
+- **Heartbeats & End-of-Stream:** Sends control messages to every partition so windows close on quiet partitions, and all remaining windows close when a replay finishes. Heartbeats follow event time, and only trades (`Last > 0`) advance the heartbeat clock: with `-only-trades=false`, non-trade events such as Xetra pre-open quotes can carry misleading timestamps that would otherwise push heartbeats ahead of later trades. No end-of-stream is sent if the replay is interrupted, and neither message is sent after a tick has failed. The topic must exist: at startup the producer waits up to about 30 s for it and then exits.
+- **Latency Stamping:** Every message carries a wall-clock produced-at header, which the analyzer copies into its output for end-to-end latency measurement.
 - **Graceful Shutdown & Observability:** Live throughput stats every 2 seconds, clean buffer flushing on `SIGINT` / `SIGTERM`.
 
 ---
@@ -22,14 +23,17 @@ The **Data Producer** is responsible for reading raw or preprocessed tick data (
 
 | File | Purpose |
 |---|---|
-| [`main.go`](file:///home/noora/school/scaddis/Course-Project-Detecting-Trading-Trends-in-Financial-Tick-Data/producer/main.go) | Service entry point; orchestrates ingestion, replay pacing, Kafka publishing, signal handling, and metrics. |
-| [`config.go`](file:///home/noora/school/scaddis/Course-Project-Detecting-Trading-Trends-in-Financial-Tick-Data/producer/config.go) | CLI flag parsing and environment variable bindings with automatic `.csv` / `.gz` fallback resolution. |
-| [`reader.go`](file:///home/noora/school/scaddis/Course-Project-Detecting-Trading-Trends-in-Financial-Tick-Data/producer/reader.go) | High-performance CSV & gzip reader with 1MB buffered I/O, format auto-detection, and fast timestamp parsing. |
-| [`replayer.go`](file:///home/noora/school/scaddis/Course-Project-Detecting-Trading-Trends-in-Financial-Tick-Data/producer/replayer.go) | Pacing controllers for `max`, `rate`, and `realtime` streaming modes. |
-| [`writer.go`](file:///home/noora/school/scaddis/Course-Project-Detecting-Trading-Trends-in-Financial-Tick-Data/producer/writer.go) | Batched Kafka publisher with hash partitioning on `MarketTick.ID` and Snappy compression. |
-| [`reader_test.go`](file:///home/noora/school/scaddis/Course-Project-Detecting-Trading-Trends-in-Financial-Tick-Data/producer/reader_test.go) | Unit and benchmark tests for CSV parsing and gzip decompression. |
-| [`replayer_test.go`](file:///home/noora/school/scaddis/Course-Project-Detecting-Trading-Trends-in-Financial-Tick-Data/producer/replayer_test.go) | Unit tests verifying pacing accuracy across all three replay modes. |
-| [`Dockerfile`](file:///home/noora/school/scaddis/Course-Project-Detecting-Trading-Trends-in-Financial-Tick-Data/producer/Dockerfile) | Multi-stage lightweight Alpine container image build. |
+| [`main.go`](main.go) | Service entry point; orchestrates ingestion, replay pacing, Kafka publishing, signal handling, and metrics. |
+| [`config.go`](config.go) | CLI flag parsing and environment variable bindings with automatic `.csv` / `.gz` fallback resolution. |
+| [`reader.go`](reader.go) | High-performance CSV & gzip reader with 1MB buffered I/O, format auto-detection, and fast timestamp parsing. |
+| [`replayer.go`](replayer.go) | Pacing controllers for `max`, `rate`, and `realtime` streaming modes. |
+| [`writer.go`](writer.go) | Batched async Kafka publisher with Snappy compression; ticks are keyed by symbol (`MarketTick.ID`) and stamped with a produced-at header. |
+| [`control.go`](control.go) | Heartbeat and end-of-stream control messages, the balancer that routes them to every partition (ticks by symbol hash), the event-time heartbeat clock, and the startup wait for the topic's partition count. |
+| [`config_test.go`](config_test.go) | Unit tests for flag vs. environment variable precedence and rejection of invalid values. |
+| [`writer_test.go`](writer_test.go) | Unit tests for produced-at stamping, control message routing and headers, the heartbeat clock, and partition lookup retries. |
+| [`reader_test.go`](reader_test.go) | Unit and benchmark tests for CSV parsing and gzip decompression. |
+| [`replayer_test.go`](replayer_test.go) | Unit tests verifying pacing accuracy across all three replay modes. |
+| [`Dockerfile`](Dockerfile) | Multi-stage lightweight Alpine container image build. |
 
 ---
 

@@ -15,6 +15,8 @@ Measured on 13 and 14 November 2026 with `bench/run.sh`. Every number here comes
 | Scaling with analyzer cores (E4) | 505k, 992k and 1.37M ticks/s on 1, 2 and 3 cores: 1.96× and 2.72× |
 | Each exchange alone (E5) | 1.28M to 1.38M ticks/s on a pre-filled topic; sustainable at 50k ticks/s with p99 19–24 ms |
 | Long-tail data (E6) | 10% of symbols make 55% of trades, but the busiest partition holds only 1.07× the average and latency is the same for busy and quiet symbols |
+| Raw events, all event types (E9) | Analyzer drains 1.50M msgs/s when it must discard the non-trades (328k trades/s); filtering in the producer instead feeds it 223k trades/s from 1.02M raw lines/s. Sustainable at 400k raw events/s with p99 28 ms |
+| Correctness against an independent ground truth | Exact match on every window, EMA and signal for the whole week, apart from the 5,506 trades that arrive 18 hours late and are dropped by design (1,812 windows, and the EMAs of the affected symbols after that) |
 | Correctness under load | All 63 runs VALID: no lost or failed messages, every window and signal reached the sink, identical counts in every repeat |
 
 ## Setup
@@ -71,7 +73,7 @@ Median p50 of 3 repeats, in ms.
 
 Most of the latency is time spent getting through Redpanda and the Kafka clients' batching, not computation. Processing time grows with the rate, from 0.1 ms to 1.3 ms at p50, but stays a small share of the total.
 
-The p99 at 5k ticks/s (about 46 ms) is higher than at the higher rates (about 30 ms). With few messages per second, batches fill slowly; this is a likely explanation but it has not been measured separately.
+The p99 at 5k ticks/s (about 46 ms) is higher than at the higher rates (about 30 ms). This comes from how few samples the run has, not from a slower pipeline. Results come out in bursts, one per closed 5-minute window across all symbols. At 5k ticks/s, one burst arrives about every 5 s, so the measured part of a run holds only about 18 bursts. One burst (the windows ending at 09:05, 3,652 results, 14% of all results in the run) was slower than the rest: broker out up to 35 ms and end-to-end up to 47 ms. Because that single burst holds more than 1% of the results, it sets the p99 on its own. At higher rates there are many more bursts, and one slow burst no longer reaches the p99.
 
 ## E2: analyzer throughput on a pre-filled topic
 
@@ -141,6 +143,62 @@ Busiest partition 1.067× the average (8 partitions, predicted: 1.090×).
 
 At 50k and 700k ticks/s the tiers' p50 also differ by under 1 ms. Windows close on the partition watermark, which every tick and the per-second heartbeats move, so a quiet symbol's window closes as soon as a busy one's (`TestHeartbeatClosesQuietSymbols`).
 
+## E9: raw events (all event types)
+
+The other experiments replay trades only, so the work of receiving and discarding quotes and housekeeping events is not measured. E9 uses one raw day file, `data/debs2022-gc-trading-day-08-11-21.csv`: 53,994,554 events, of which 11,856,732 have a last price (4.6 events per trade). 62,212 of those have a zero price and are dropped as invalid, leaving 11,794,520 trades, the same as `data/trades_only_08-11-21.csv`. The day's busiest second has 22,537 events and 3,988 trades.
+
+Run with `bench/raw-events.sh` on 19 November 2026, same machine, core layout and settings as above (AC power, `performance` profile, Redpanda v26.2.4). 3 repeats per configuration, all 18 runs VALID. Medians, range in brackets.
+
+| Experiment | What is measured | Result |
+|---|---|---|
+| Filter at the edge (`ONLY_TRADES=1`, `MODE=max`) | Producer reads all events, forwards only trades | Producer reads 1.02M lines/s and forwards 223,152 trades/s (222,508–223,800); the whole day in 53 s. Producer at 156% CPU is the limit; analyzer at 45% |
+| Drain all events (`ONLY_TRADES=0`, `PREFILL=1`) | Analyzer receives every event and discards the non-trades | 1,504,634 msgs/s (1,498,983–1,508,891), which is 327,809 trades/s; analyzer at 230% of its 300% |
+| Fixed rates, all events (`ONLY_TRADES=0`) | Latency and sustainability with non-trades in the pipeline | See below |
+
+**Correctness:** filter and drain runs produce identical output in all 6 runs: 373,126 windows, 4,840 BUY, 0 SELL, 0 late, 0 bad. Forwarding the non-trades does not change the results, and with non-trades in the stream no trade arrived behind a heartbeat (0 late), which checks that only trades advance the heartbeat clock.
+
+**Cost of a non-trade:** draining all events, the analyzer handles 1.50M messages/s, slightly more than the 1.38M trades/s of E2. Discarding a non-trade therefore costs about as much as processing a trade, most likely because decoding the message dominates. Forwarding everything cuts the analyzer's trade throughput to 328k trades/s, so filtering at the producer gives the analyzer about 4× more trade capacity, and also cuts broker traffic by 4.6×.
+
+### Fixed rates with all events
+
+| Target rate (events/s) | Producer reached | Trades/s | p50 ms | p99 ms | Max lag | Analyzer CPU | Producer CPU | Sustainable |
+|---|---|---|---|---|---|---|---|---|
+| 50,000 | 49,999 | 11,361 | 17.8 | 31.3 (31.2–34.8) | 241 | 12% | 36% | 3/3 |
+| 200,000 | 199,997 | 44,972 | 17.8 | 29.8 (26.2–30.1) | 875 | 42% | 84% | 3/3 |
+| 400,000 | 399,998 | 87,384 | 18.4 | 28.2 (27.7–29.9) | 1,714 | 79% | 133% | 3/3 |
+| 600,000 | 524,853 | 114,662 | 19.1 | 29.5 (28.8–30.0) | 1,736 | 101% | 163% | 0/3 |
+
+At 600k only the producer condition fails: parsing the 27-column raw lines limits it to about 525k events/s, compared with about 695k ticks/s on the 7-column trades file. Lag stayed bounded and p99 at 30 ms, so the analyzer kept up. Latency is the same as with trades only (E3), because it is measured on the trades that close windows and the non-trades only add work the analyzer has spare capacity for.
+
+The busiest second of the raw day (22,537 events) is about 18× below the highest sustainable tested raw rate (400k events/s).
+
+## Correctness against the ground truth
+
+`scripts/ground_truth.py` computes Query 1 and Query 2 straight from the spec as a batch job. It shares no code with the analyzer and has no partitions, watermarks or grace period, so it counts every trade however late. `scripts/compare_results.py` compares a run's `results.csv` with it: every (symbol, window) pair, the close price, both EMAs (relative tolerance 1e-9) and the signal. Outputs are in `results/ground-truth/`.
+
+| Comparison | Windows matched | BUY / SELL, truth vs system | Differing windows | Result |
+|---|---|---|---|---|
+| Monday (8 Nov), all 6 E9 runs (raw input, filter and drain) | 373,126 / 373,126 | 4,840 / 0 vs 4,840 / 0 | 0, max EMA error 0 | **Match** |
+| Week, E2 run vs full ground truth | 1,855,645 / 1,857,457 (99.90%) | 7,772 / 3,583 vs 7,769 / 3,580 | 1,812 missing, 683,775 EMA differences | Differs |
+| Week, E2 run vs ground truth without the 5,506 late trades | 1,855,645 / 1,855,645 | 7,769 / 3,580 vs 7,769 / 3,580 | 0, max EMA error 0 | **Match** |
+
+All differences come from the 5,506 trades that arrive on 10 Nov at 18:56 with a trading time of 01:00 that day. The analyzer drops them as late, as designed. That removes 1,812 windows at 01:00, and because an EMA carries over from window to window, it shifts the EMAs of the affected symbols for the rest of the week. With only those trades removed from the reference, every window, EMA value and signal over the whole week matches.
+
+**Day by day**, E2 run vs the full ground truth (by window start date):
+
+| Day | Trades | Symbols traded | Windows, truth | Windows, system | BUY truth / system | SELL truth / system | First-window BUYs | Missing windows | EMA differences | Differences without the late trades |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Mon 8 Nov | 11,794,520 | 4,840 | 373,126 | 373,126 | 4,840 / 4,840 | 0 / 0 | 4,840 | 0 | 0 | 0 |
+| Tue 9 Nov | 11,900,121 | 4,851 | 371,307 | 371,307 | 82 / 82 | 94 / 94 | 76 | 0 | 0 | 0 |
+| Wed 10 Nov | 12,068,273 | 4,848 | 373,987 | 372,175 | 609 / 608 | 983 / 983 | 26 | 1,812 | 228,193 | 0 |
+| Thu 11 Nov | 11,835,403 | 4,835 | 368,727 | 368,727 | 973 / 971 | 1,320 / 1,317 | 21 | 0 | 228,289 | 0 |
+| Fri 12 Nov | 11,793,353 | 4,843 | 370,310 | 370,310 | 1,268 / 1,268 | 1,186 / 1,186 | 7 | 0 | 227,293 | 0 |
+| **Week** | **59,391,670** | **4,970** | **1,857,457** | **1,855,645** | **7,772 / 7,769** | **3,583 / 3,580** | **4,970** | **1,812** | **683,775** | **0** |
+
+Monday and Tuesday match exactly; the differences start with the late batch on Wednesday. Trades per day are from `data/trades_only_<day>.csv` (Saturday and Sunday have none). Symbols traded counts symbols with at least one window that day.
+
+Monday has no crossovers: all 4,840 BUYs are the signal each symbol gets in its first window, because both EMAs start at 0 and EMA38 rises faster. The Monday match therefore checks windows and EMAs; crossover detection is checked by the rest of the week (2,799 BUY and 3,580 SELL after the first windows, all matching without the late trades).
+
 ## Resources
 
 | Component | CPU at 700k ticks/s | Max memory |
@@ -201,6 +259,7 @@ The results support the main claims: the system gives correct results, is fast, 
 - **Redpanda in development mode** with one core and 1 GB, so broker-side numbers would be different in production.
 - **Constant rate.** These runs replay the data at a constant rate. The real data is bursty; a replay at 10× historical speed (`MODE=realtime SPEED=10`, peaks around 46k ticks/s) would show latency under the real pattern, and has not been run yet.
 - **At most 3 analyzer cores** were tested; the rest of the laptop's cores are slower E-cores.
+- **Raw events measured on one day only.** E9 uses the 8 November raw file; the other experiments use the whole week of trades.
 - **Not yet measured:** per-partition lag and latency, synthetic heavier skew, the empty-window `carry` policy, and other grace periods.
 
 ## Reproducing
@@ -215,5 +274,8 @@ for i in 1 2 3; do for ex in FR NL ETR; do                                   # E
   PREFILL=1 INPUT=data/trades_week_$ex.csv bench/run.sh e5-drain-$ex
   RATE=50000 MAX_TICKS=7500000 INPUT=data/trades_week_$ex.csv bench/run.sh e5-rate-$ex
 done; done
+bench/raw-events.sh                                                          # E9, about 41 min
+python3 scripts/ground_truth.py data/trades_only_week.csv -o results/ground-truth/truth_week.csv     # ground truth, about 1 min
+python3 scripts/compare_results.py results/ground-truth/truth_week.csv results/e2-drain/<run>/results.csv
 powerprofilesctl set balanced
 ```

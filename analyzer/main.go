@@ -324,6 +324,7 @@ func (m *metrics) totals(d *dispatcher) (t workerStats, minWM, maxWM int64) {
 		t.Ticks += s.Ticks
 		t.Heartbeats += s.Heartbeats
 		t.EOS += s.EOS
+		t.NonTrades += s.NonTrades
 		t.BadMessages += s.BadMessages
 		t.SinkErrors += s.SinkErrors
 		t.Engine.TicksLate += s.Engine.TicksLate
@@ -370,16 +371,17 @@ func (m *metrics) summary(d *dispatcher) {
 	// message), so idle time before the producer starts or after it ends
 	// does not dilute it.
 	active := time.Duration(d.lastInput.Load() - d.firstInput.Load())
-	rate := 0.0
+	rate, msgRate := 0.0, 0.0
 	if active > 0 {
 		rate = float64(t.Ticks) / active.Seconds()
+		msgRate = float64(t.Messages) / active.Seconds()
 	}
 	log.Println("==================================================")
 	log.Printf("Partitions      : %d", len(d.all()))
-	log.Printf("Messages        : %d (ticks %d, heartbeats %d, eos %d, bad %d)", t.Messages, t.Ticks, t.Heartbeats, t.EOS, t.BadMessages)
+	log.Printf("Messages        : %d (ticks %d, heartbeats %d, eos %d, bad %d, non-trades %d)", t.Messages, t.Ticks, t.Heartbeats, t.EOS, t.BadMessages, t.NonTrades)
 	log.Printf("Late (dropped)  : %d", t.Engine.TicksLate)
 	log.Printf("Windows emitted : %d", t.Engine.WindowsEmitted)
 	log.Printf("BUY / SELL      : %d / %d", t.Engine.BuySignals, t.Engine.SellSignals)
-	log.Printf("Elapsed         : %v (input active %v, %.0f ticks/s)", el.Round(time.Millisecond), active.Round(time.Millisecond), rate)
+	log.Printf("Elapsed         : %v (input active %v, %.0f ticks/s, %.0f msgs/s)", el.Round(time.Millisecond), active.Round(time.Millisecond), rate, msgRate)
 	log.Println("==================================================")
 }

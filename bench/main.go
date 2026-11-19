@@ -4,6 +4,7 @@
 //	bench sink     records the analyzer's output with receive timestamps
 //	bench sample   records CPU and memory of running processes
 //	bench analyze  turns a run folder into a summary and time series
+//	bench rawstats counts events and trades in raw day files, with peak rates
 package main
 
 import (
@@ -23,6 +24,8 @@ func main() {
 		err = runSample(os.Args[2:])
 	case "analyze":
 		err = runAnalyze(os.Args[2:])
+	case "rawstats":
+		err = runRawStats(os.Args[2:])
 	default:
 		usage()
 	}
@@ -33,6 +36,6 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: bench sink|sample|analyze [flags]")
+	fmt.Fprintln(os.Stderr, "usage: bench sink|sample|analyze|rawstats [flags]")
 	os.Exit(2)
 }

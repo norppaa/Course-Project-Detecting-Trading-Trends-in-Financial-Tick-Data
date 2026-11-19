@@ -54,12 +54,15 @@ type analyzerLog struct {
 	samples                          []statsSample
 	messages, ticks, heartbeats, eos int64
 	bad, late, windows, buys, sells  int64
-	ticksPerSecond                   float64
+	nonTrades                        int64 // quotes/housekeeping forwarded with -only-trades=false
+	ticksPerSecond, msgsPerSecond    float64
 	found                            bool
 }
 
 type producerLog struct {
 	delivered, failed, controlSent, controlFailed int64
+	linesRead                                     int64 // input lines read, including filtered ones
+	elapsed                                       time.Duration
 	rate                                          float64
 	found                                         bool
 }
@@ -71,16 +74,18 @@ type resourceStats struct {
 
 var (
 	reStats = regexp.MustCompile(`^(\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}) \[Stats\] ticks (\d+)\s+([\d.]+)/s \| lag (\d+)`)
-	reMsgs  = regexp.MustCompile(`Messages\s+: (\d+) \(ticks (\d+), heartbeats (\d+), eos (\d+), bad (\d+)\)`)
+	reMsgs  = regexp.MustCompile(`Messages\s+: (\d+) \(ticks (\d+), heartbeats (\d+), eos (\d+), bad (\d+)(?:, non-trades (\d+))?\)`)
 	reLate  = regexp.MustCompile(`Late \(dropped\)\s+: (\d+)`)
 	reWins  = regexp.MustCompile(`Windows emitted\s+: (\d+)`)
 	reSigs  = regexp.MustCompile(`BUY / SELL\s+: (\d+) / (\d+)`)
-	reRate  = regexp.MustCompile(`input active \S+, (\d+) ticks/s`)
+	reRate  = regexp.MustCompile(`input active \S+, (\d+) ticks/s(?:, (\d+) msgs/s)?`)
 
 	reDelivered = regexp.MustCompile(`Ticks Delivered\s+: (\d+)`)
 	reFailed    = regexp.MustCompile(`Ticks Failed\s+: (\d+)`)
 	reControl   = regexp.MustCompile(`Control Messages\s+: (\d+) sent, (\d+) failed`)
 	reOverall   = regexp.MustCompile(`Overall Avg Rate\s+: (\d+)`)
+	reLines     = regexp.MustCompile(`Total Lines Read\s+: (\d+)`)
+	reElapsed   = regexp.MustCompile(`Total Elapsed Time\s+: (\S+)`)
 )
 
 func runAnalyze(args []string) error {
@@ -106,7 +111,7 @@ func runAnalyze(args []string) error {
 
 	cfg := readConfig(filepath.Join(*dir, "config.env"))
 	fmt.Fprintf(out, "Run: %s\n", *dir)
-	for _, k := range []string{"INPUT", "MODE", "RATE", "SPEED", "PARTITIONS", "GRACE", "POLICY", "HEARTBEAT", "MAX_TICKS", "PREFILL"} {
+	for _, k := range []string{"INPUT", "MODE", "RATE", "SPEED", "PARTITIONS", "GRACE", "POLICY", "HEARTBEAT", "MAX_TICKS", "PREFILL", "ONLY_TRADES"} {
 		fmt.Fprintf(out, "  %-11s %s\n", k, cfg[k])
 	}
 
@@ -125,7 +130,16 @@ func runAnalyze(args []string) error {
 
 	fmt.Fprintf(out, "\nThroughput\n")
 	fmt.Fprintf(out, "  producer  %.0f ticks/s\n", prod.rate)
+	if prod.linesRead > 0 && prod.elapsed > 0 {
+		// Lines include rows the producer filtered out (with -only-trades), so
+		// this is the rate at which raw input was read, parsed and filtered.
+		fmt.Fprintf(out, "  producer  %.0f input lines/s read and parsed (%d lines in %v)\n",
+			float64(prod.linesRead)/prod.elapsed.Seconds(), prod.linesRead, prod.elapsed)
+	}
 	fmt.Fprintf(out, "  analyzer  %.0f ticks/s while input was flowing\n", ana.ticksPerSecond)
+	if ana.nonTrades > 0 {
+		fmt.Fprintf(out, "  analyzer  %.0f msgs/s while input was flowing (ticks, non-trades and control messages)\n", ana.msgsPerSecond)
+	}
 	prefilled := cfg["PREFILL"] == "1"
 	if prefilled {
 		fmt.Fprintf(out, "  (topic was filled before the analyzer started: this is the analyzer's own read rate)\n")
@@ -188,8 +202,8 @@ func runAnalyze(args []string) error {
 
 	fmt.Fprintf(out, "\nCounts\n")
 	fmt.Fprintf(out, "  producer  delivered %d, failed %d, control %d (failed %d)\n", prod.delivered, prod.failed, prod.controlSent, prod.controlFailed)
-	fmt.Fprintf(out, "  analyzer  ticks %d, heartbeats %d, eos %d, bad %d, late %d, windows %d, BUY %d, SELL %d\n",
-		ana.ticks, ana.heartbeats, ana.eos, ana.bad, ana.late, ana.windows, ana.buys, ana.sells)
+	fmt.Fprintf(out, "  analyzer  ticks %d, non-trades %d, heartbeats %d, eos %d, bad %d, late %d, windows %d, BUY %d, SELL %d\n",
+		ana.ticks, ana.nonTrades, ana.heartbeats, ana.eos, ana.bad, ana.late, ana.windows, ana.buys, ana.sells)
 	fmt.Fprintf(out, "  sink      indicators %d, signals %d, bad %d\n", sink.Indicators, sink.Signals, sink.Bad)
 
 	fmt.Fprintf(out, "\nChecks\n")
@@ -204,7 +218,8 @@ func runAnalyze(args []string) error {
 	}
 	check(prod.found && ana.found, "producer and analyzer finished and printed summaries")
 	check(prod.failed == 0 && prod.controlFailed == 0, "producer had no failed messages")
-	check(prod.delivered == ana.ticks, "analyzer read every tick (%d delivered, %d read)", prod.delivered, ana.ticks)
+	// With -only-trades=false the producer's "ticks" include non-trade events.
+	check(prod.delivered == ana.ticks+ana.nonTrades, "analyzer read every tick (%d delivered, %d read)", prod.delivered, ana.ticks+ana.nonTrades)
 	check(ana.bad == 0 && sink.Bad == 0, "no undecodable messages")
 	check(ana.windows == sink.Indicators, "sink got every window (%d emitted, %d received)", ana.windows, sink.Indicators)
 	check(ana.buys+ana.sells == sink.Signals, "sink got every signal (%d emitted, %d received)", ana.buys+ana.sells, sink.Signals)
@@ -305,6 +320,10 @@ func readProducerLog(path string) (producerLog, error) {
 			p.controlSent, p.controlFailed = atoi64(m[1]), atoi64(m[2])
 		} else if m := reOverall.FindStringSubmatch(l); m != nil {
 			p.rate = float64(atoi64(m[1]))
+		} else if m := reLines.FindStringSubmatch(l); m != nil {
+			p.linesRead = atoi64(m[1])
+		} else if m := reElapsed.FindStringSubmatch(l); m != nil {
+			p.elapsed, _ = time.ParseDuration(m[1])
 		}
 	})
 	return p, err
@@ -319,6 +338,9 @@ func readAnalyzerLog(path string) (analyzerLog, error) {
 			a.samples = append(a.samples, statsSample{at: at, ticks: atoi64(m[2]), rate: rate, lag: atoi64(m[4])})
 		} else if m := reMsgs.FindStringSubmatch(l); m != nil {
 			a.messages, a.ticks, a.heartbeats, a.eos, a.bad = atoi64(m[1]), atoi64(m[2]), atoi64(m[3]), atoi64(m[4]), atoi64(m[5])
+			if m[6] != "" {
+				a.nonTrades = atoi64(m[6])
+			}
 			a.found = true
 		} else if m := reLate.FindStringSubmatch(l); m != nil {
 			a.late = atoi64(m[1])
@@ -328,6 +350,9 @@ func readAnalyzerLog(path string) (analyzerLog, error) {
 			a.buys, a.sells = atoi64(m[1]), atoi64(m[2])
 		} else if m := reRate.FindStringSubmatch(l); m != nil {
 			a.ticksPerSecond = float64(atoi64(m[1]))
+			if m[2] != "" {
+				a.msgsPerSecond = float64(atoi64(m[2]))
+			}
 		}
 	})
 	return a, err
