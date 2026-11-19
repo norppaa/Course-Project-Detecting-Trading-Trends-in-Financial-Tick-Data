@@ -99,6 +99,13 @@ Going beyond that means using E-cores, which are slower, so say so in the report
 INPUT=data/trades_FR.csv RATE=50000 bench/run.sh exchange-FR
 ```
 
+**Raw events (E9).** The other benchmarks replay trades only, so the work of receiving and discarding quotes and housekeeping events (about 4.6 events per trade) is not measured. `bench/raw-events.sh` measures it on one raw day file: the producer filtering at the edge, the analyzer draining all events, and all events through the pipeline at fixed rates. About 1 h; a summary goes to `results/e9-raw.log`:
+
+```bash
+bench/raw-events.sh                 # REPEATS=1 for a quick run
+go run ./bench rawstats data/debs2022-gc-trading-day-*.csv   # events, trades and busiest second per day
+```
+
 **Repeating a run.** Run each configuration about 3 times and report the median and range:
 
 ```bash
@@ -125,6 +132,7 @@ The default core layout fits the development laptop (Intel Core Ultra 7 258V): C
 | `P99_LIMIT` | `1s` | End-to-end p99 limit for the "sustainable" verdict |
 | `COMPARE` | `0` | `1` = also run the offline tool and compare results; needs `MAX_TICKS=0` |
 | `SINK_IDLE` | `10s` | After the producer ends, stop once there are no results for this long |
+| `ONLY_TRADES` | `1` | `0` = the producer forwards every event of a raw file (quotes, housekeeping) and the analyzer discards the non-trades, counted as `non-trades` in the summary |
 | `ANALYZER_CPUS` | `0-2` | CPU cores for the analyzer (P-cores) |
 | `REDPANDA_CPUS` | `3` | CPU cores for Redpanda (P-core), set with `docker update` |
 | `PRODUCER_CPUS` | `4-6` | CPU cores for the producer (E-cores) |

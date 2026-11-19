@@ -112,6 +112,23 @@ func TestHeartbeatClock(t *testing.T) {
 	}
 }
 
+func TestHeartbeatClockIgnoresNonTrades(t *testing.T) {
+	base := time.Date(2021, 11, 8, 7, 15, 0, 0, time.UTC)
+	c := heartbeatClock{interval: time.Second}
+	c.observeTick(&models.MarketTick{Price: 10, Timestamp: base})
+	// A quote dated with the previous evening's trading time must not move
+	// the clock, or every later trade would be behind the heartbeat.
+	if _, due := c.observeTick(&models.MarketTick{Price: 0, Timestamp: base.Add(14 * time.Hour)}); due {
+		t.Error("heartbeat due after a non-trade")
+	}
+	if !c.latest.Equal(base) {
+		t.Errorf("latest = %v, want %v", c.latest, base)
+	}
+	if got, due := c.observeTick(&models.MarketTick{Price: 10, Timestamp: base.Add(time.Second)}); !due || !got.Equal(base.Add(time.Second)) {
+		t.Errorf("trade after the interval: got (%v, %t)", got, due)
+	}
+}
+
 func TestRetryPartitionCount(t *testing.T) {
 	calls := 0
 	n, err := retryPartitionCount(context.Background(), 5, time.Millisecond, func(context.Context) (int, error) {

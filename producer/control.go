@@ -76,6 +76,20 @@ type heartbeatClock struct {
 	lastSent time.Time     // event time of the previous heartbeat
 }
 
+// observeTick is observe for a tick read from the input. Only trades move the
+// clock: heartbeats promise the analyzer which trade event times have been
+// sent, and the analyzer ignores everything else. Non-trade events (forwarded
+// with -only-trades=false) can carry misleading times; in the raw data, Xetra
+// quotes at 07:15 carry the previous evening's trading time with no trading
+// date, so they would be dated 21:40 of the current day and every later trade
+// would arrive behind the heartbeat.
+func (c *heartbeatClock) observeTick(t *models.MarketTick) (time.Time, bool) {
+	if !(t.Price > 0) {
+		return time.Time{}, false
+	}
+	return c.observe(t.Timestamp)
+}
+
 // observe records a tick's event time and returns the event time to send in a
 // heartbeat, if one is due.
 func (c *heartbeatClock) observe(ts time.Time) (time.Time, bool) {

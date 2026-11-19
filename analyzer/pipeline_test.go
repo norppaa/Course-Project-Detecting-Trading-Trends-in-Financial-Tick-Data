@@ -161,17 +161,33 @@ func TestBadMessagesAreCountedNotFatal(t *testing.T) {
 	sink := &memSink{}
 	w := newWorker(0, testConfig(), sink)
 	w.handle(inMsg{kind: models.KindTick, value: []byte("{not json")})
-	w.handle(inMsg{value: []byte(`{"id":"A.FR","price":0,"timestamp":"2021-11-08T09:00:00Z"}`)})
+	w.handle(inMsg{value: []byte(`{"id":"A.FR","price":5}`)}) // trade without a timestamp
 	w.handle(inMsg{value: []byte(`{"id":"","price":5,"timestamp":"2021-11-08T09:00:00Z"}`)})
 	w.handle(inMsg{kind: models.KindHeartbeat, value: []byte(`{}`)})
 	w.handle(inMsg{kind: "something-else"})
-	if w.st.BadMessages != 5 || w.st.Ticks != 0 {
-		t.Errorf("bad=%d ticks=%d", w.st.BadMessages, w.st.Ticks)
+	if w.st.BadMessages != 5 || w.st.Ticks != 0 || w.st.NonTrades != 0 {
+		t.Errorf("bad=%d ticks=%d nonTrades=%d", w.st.BadMessages, w.st.Ticks, w.st.NonTrades)
 	}
 	// A message without a kind header is a tick.
 	w.handle(inMsg{value: []byte(`{"id":"A.FR","sec_type":"I","price":5,"timestamp":"2021-11-08T09:00:00Z"}`)})
 	if w.st.Ticks != 1 {
 		t.Errorf("tick without kind header not accepted")
+	}
+}
+
+func TestNonTradesAreCountedSeparately(t *testing.T) {
+	sink := &memSink{}
+	w := newWorker(0, testConfig(), sink)
+	// Quotes and housekeeping events forwarded with -only-trades=false:
+	// no trade price, and possibly no timestamp.
+	w.handle(inMsg{value: []byte(`{"id":"A.FR","price":0,"timestamp":"2021-11-08T09:00:00Z"}`)})
+	w.handle(inMsg{value: []byte(`{"id":"A.FR","price":0}`)})
+	w.handle(tickMsg(t, "A.FR", 10, at(9, 0, 10)))
+	if w.st.NonTrades != 2 || w.st.BadMessages != 0 || w.st.Ticks != 1 {
+		t.Errorf("nonTrades=%d bad=%d ticks=%d", w.st.NonTrades, w.st.BadMessages, w.st.Ticks)
+	}
+	if got := w.eng.Stats().TicksAccepted; got != 1 {
+		t.Errorf("engine accepted %d ticks, want 1: non-trades must not reach it", got)
 	}
 }
 

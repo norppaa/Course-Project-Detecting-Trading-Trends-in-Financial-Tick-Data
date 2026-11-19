@@ -26,6 +26,9 @@ WARMUP=${WARMUP:-30s}
 P99_LIMIT=${P99_LIMIT:-1s}
 COMPARE=${COMPARE:-0}
 SINK_IDLE=${SINK_IDLE:-10s}
+# ONLY_TRADES=0: the producer forwards every event (quotes, housekeeping) and
+# the analyzer discards the non-trades itself. Use with a raw day file.
+ONLY_TRADES=${ONLY_TRADES:-1}
 # Default core layout for the development laptop (Intel Core Ultra 7 258V):
 # CPUs 0-3 are P-cores, 4-7 are low-power E-cores. The system under test
 # (analyzer, Redpanda) gets the P-cores, the load generator and sink the
@@ -89,6 +92,7 @@ go build -o "$BIN/bench" ./bench
     echo "HEARTBEAT=$HEARTBEAT"
     echo "MAX_TICKS=$MAX_TICKS"
     echo "PREFILL=$PREFILL"
+    echo "ONLY_TRADES=$ONLY_TRADES"
     echo "PRODUCER_CPUS=$PRODUCER_CPUS"
     echo "ANALYZER_CPUS=$ANALYZER_CPUS"
     echo "SINK_CPUS=$SINK_CPUS"
@@ -123,7 +127,8 @@ REDPANDA_PID=$(docker inspect -f '{{.State.Pid}}' redpanda)
 start_producer() {
     echo "== Replaying $INPUT (mode $MODE)"
     ( pinned "$PRODUCER_CPUS" "$BIN/producer" -brokers "$BROKERS" -topic "$TICKS_TOPIC" -input "$INPUT" \
-        -mode "$MODE" -rate "$RATE" -speed "$SPEED" -heartbeat "$HEARTBEAT" -max-ticks "$MAX_TICKS" ) > "$OUT/producer.log" 2>&1 &
+        -mode "$MODE" -rate "$RATE" -speed "$SPEED" -heartbeat "$HEARTBEAT" -max-ticks "$MAX_TICKS" \
+        -only-trades="$( [ "$ONLY_TRADES" = 1 ] && echo true || echo false )" ) > "$OUT/producer.log" 2>&1 &
     PRODUCER=$!
     PIDS+=("$PRODUCER")
 }

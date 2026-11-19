@@ -161,7 +161,7 @@ func main() {
 		processedTicks++
 		latestTick.Store(tick)
 
-		if eventTime, due := clock.observe(tick.Timestamp); due {
+		if eventTime, due := clock.observeTick(tick); due {
 			// Queued ticks first: the heartbeat must not overtake them.
 			publishPending()
 			if canPromise() {

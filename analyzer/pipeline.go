@@ -48,6 +48,7 @@ type workerStats struct {
 	Heartbeats   int64
 	EOS          int64
 	IdleFlushes  int64
+	NonTrades    int64 // valid events without a trade price (quotes, housekeeping), ignored
 	BadMessages  int64 // undecodable or invalid payload, unknown kind
 	SinkErrors   int64
 	Engine       engine.Stats
@@ -102,7 +103,18 @@ func (w *worker) handle(m inMsg) {
 	switch m.kind {
 	case "", models.KindTick:
 		var t models.MarketTick
-		if err := json.Unmarshal(m.value, &t); err != nil || t.ID == "" || t.Timestamp.IsZero() || !(t.Price > 0) {
+		if err := json.Unmarshal(m.value, &t); err != nil || t.ID == "" {
+			w.st.BadMessages++
+			return
+		}
+		// With -only-trades=false the producer also forwards quotes and
+		// housekeeping events, which carry no trade price. They are expected
+		// input, not errors, so they get their own counter.
+		if !(t.Price > 0) {
+			w.st.NonTrades++
+			return
+		}
+		if t.Timestamp.IsZero() {
 			w.st.BadMessages++
 			return
 		}
