@@ -96,7 +96,7 @@ Sample output:
 
 ### Method 3: Reading Data in Go (Downstream Consumer)
 
-Downstream services (like the Stream Analyzer) consume from `market-ticks` using `kafka-go` and the shared [`pkg/models`](file:///home/noora/school/scaddis/Course-Project-Detecting-Trading-Trends-in-Financial-Tick-Data/pkg/models/tick.go):
+Downstream services (like the Stream Analyzer) consume from `market-ticks` using `kafka-go` and the shared [`pkg/models`](../pkg/models/tick.go):
 
 ```go
 package main

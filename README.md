@@ -1,7 +1,7 @@
 # Developer Guide: Detecting Trading Trends in Financial Tick Data
 
 > **CS-E4780 Scalable Systems and Data Management** — Course Project  
-> [Overleaf Report](https://www.overleaf.com/8759344531hyxrvyfbdfkc#7fefc3) • [DEBS 2022 Dataset (Zenodo)](https://zenodo.org/records/6382482)
+> [DEBS 2022 Dataset (Zenodo)](https://zenodo.org/records/6382482)
 
 This document is the **development guide** for building, testing, and debugging the system components.
 
@@ -73,7 +73,7 @@ data/debs2022-gc-trading-day-08-11-21.csv
 ```
 
 ### Preprocessing the Dataset
-The raw dataset contains 27+ attributes and millions of housekeeping rows. Use [`scripts/clean_data.go`](file:///home/noora/school/scaddis/Course-Project-Detecting-Trading-Trends-in-Financial-Tick-Data/scripts/clean_data.go) to extract only the starred attributes required by the assignment (`ID`, `SecType`, `Date`, `Time`, `Last`, `TradingTime`, `TradingDate`):
+The raw dataset contains 27+ attributes and millions of housekeeping rows. Use [`scripts/clean_data.go`](scripts/clean_data.go) to extract only the starred attributes required by the assignment (`ID`, `SecType`, `Date`, `Time`, `Last`, `TradingTime`, `TradingDate`):
 
 see scripts/readme.md
 

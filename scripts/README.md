@@ -1,4 +1,4 @@
-Add a script that cleans the data. 
+# Scripts
 
 To get your own test data, download a day of data and run the script on it.
 
