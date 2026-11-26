@@ -11,7 +11,7 @@ NAME=${1:?usage: [SETTING=value ...] bench/run.sh <experiment-name>}
 INPUT=${INPUT:-data/trades_cleaned.csv}
 # PREFILL=1: the producer fills the topic first and the analyzer starts only
 # after it has finished, so the analyzer's read rate is not limited by the
-# producer (E2). Latency then mostly measures time spent waiting in the topic.
+# producer. Latency then mostly measures time spent waiting in the topic.
 PREFILL=${PREFILL:-0}
 if [ "$PREFILL" = 1 ]; then MODE=${MODE:-max}; fi
 MODE=${MODE:-rate}

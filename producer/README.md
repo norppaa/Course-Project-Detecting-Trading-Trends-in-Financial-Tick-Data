@@ -86,7 +86,37 @@ docker compose run --rm producer ./producer -mode rate -rate 2000
 
 ---
 
-## 5. Running Tests & Benchmarks
+## 5. Inspecting the Streamed Data
+
+**Redpanda Web Console:** open [http://localhost:8080](http://localhost:8080), go to **Topics → `market-ticks`** and open the **Messages** tab to see payloads, partitions and timestamps.
+
+**Terminal (`rpk`):**
+
+```bash
+# View the first 5 messages
+docker exec redpanda rpk topic consume market-ticks --brokers redpanda:9092 -n 5
+
+# Follow live incoming messages
+docker exec redpanda rpk topic consume market-ticks --brokers redpanda:9092
+```
+
+Sample output:
+```json
+{
+  "topic": "market-ticks",
+  "key": "IGGOU.FR",
+  "value": "{\"id\":\"IGGOU.FR\",\"sec_type\":\"I\",\"timestamp\":\"2021-11-08T07:00:00.023Z\",\"price\":60.9096,\"trading_date\":\"08-11-2021\",\"trading_time\":\"07:00:00.023\"}",
+  "timestamp": 1636354800023,
+  "partition": 0,
+  "offset": 0
+}
+```
+
+Go consumers decode the payload with the shared [`models.MarketTick`](../pkg/models/tick.go); the [analyzer](../analyzer) is the reference consumer.
+
+---
+
+## 6. Running Tests & Benchmarks
 
 ```bash
 # Run unit and race tests

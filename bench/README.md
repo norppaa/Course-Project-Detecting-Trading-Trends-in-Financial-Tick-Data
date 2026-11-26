@@ -99,7 +99,7 @@ Going beyond that means using E-cores, which are slower, so say so in the report
 INPUT=data/trades_FR.csv RATE=50000 bench/run.sh exchange-FR
 ```
 
-**Raw events (E9).** The other benchmarks replay trades only, so the work of receiving and discarding quotes and housekeeping events (about 4.6 events per trade) is not measured. `bench/raw-events.sh` measures it on one raw day file: the producer filtering at the edge, the analyzer draining all events, and all events through the pipeline at fixed rates. About 1 h; a summary goes to `results/e9-raw.log`:
+**Raw events.** The other benchmarks replay trades only, so the work of receiving and discarding quotes and housekeeping events (about 4.6 events per trade) is not measured. `bench/raw-events.sh` measures it on one raw day file: the producer filtering at the edge, the analyzer draining all events, and all events through the pipeline at fixed rates. About 1 h; a summary goes to `results/e9-raw.log`:
 
 ```bash
 bench/raw-events.sh                 # REPEATS=1 for a quick run
@@ -182,13 +182,6 @@ To analyze a finished run again, for example with a different p99 limit:
 ```bash
 go run ./bench analyze -dir results/<experiment>/<timestamp> -p99-limit 500ms
 ```
-
-## For results you put in the report
-
-- Benchmark on a machine that is otherwise idle.
-- Check that the producer isn't the limit: if it is using close to all its cores, a higher `RATE` measures the producer and not the analyzer.
-- Use the same settings when comparing runs, changing only the one you are testing.
-- Keep the Redpanda configuration in mind: `docker-compose.yml` runs it with one core and 1 GB in `dev-container` mode, which may be the bottleneck.
 
 ## Troubleshooting
 
