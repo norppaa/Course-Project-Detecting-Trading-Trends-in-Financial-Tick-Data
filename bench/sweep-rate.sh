@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# E3: latency and sustainability across input rates.
+# Latency and sustainability across input rates.
 # Each run replays the start of the input at a fixed rate for about DURATION
 # seconds (warmup included). Repetitions are interleaved, so slow drift of the
 # machine is spread over all rates. Results go to results/e3-rate-<rate>/.

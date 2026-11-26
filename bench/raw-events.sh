@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# E9: the cost of the non-trade events that the main benchmarks filter out
+# Raw events: the cost of the non-trade events that the main benchmarks filter out
 # before the pipeline. Uses one raw day file (about 54M events, 4.6 per trade).
 #
 #   1. rawstats    events, trades and the busiest second of each (no broker)

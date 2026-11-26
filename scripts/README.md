@@ -1,4 +1,4 @@
-Add a script that cleans the data. 
+# Scripts
 
 To get your own test data, download a day of data and run the script on it.
 
@@ -27,6 +27,22 @@ To get your own test data, download a day of data and run the script on it.
 
     go run scripts/clean_data.go \
       --output=data/trades_cleaned.csv.gz
+
+#### The whole week (used by the benchmarks and the ground truth)
+
+Clean each trading day with `--only-trades`, then join the days in date order
+with a single header. Saturday and Sunday have no trades, so they can be left out.
+
+    for d in 08 09 10 11 12; do
+      go run scripts/clean_data.go --only-trades \
+        --input=data/debs2022-gc-trading-day-$d-11-21.csv \
+        --output=data/trades_only_$d-11-21.csv
+    done
+    { head -n 1 data/trades_only_08-11-21.csv
+      for d in 08 09 10 11 12; do tail -n +2 data/trades_only_$d-11-21.csv; done
+    } > data/trades_only_week.csv
+
+The result has 59,391,670 trades plus the header line.
 
 ## Ground truth and correctness check
 
