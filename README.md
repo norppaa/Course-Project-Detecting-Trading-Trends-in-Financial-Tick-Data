@@ -1,22 +1,54 @@
-# Developer Guide: Detecting Trading Trends in Financial Tick Data
+# Detecting Trading Trends in Financial Tick Data
 
-> **CS-E4780 Scalable Systems and Data Management** — Course Project  
-> [DEBS 2022 Dataset (Zenodo)](https://zenodo.org/records/6382482)
+> **CS-E4780 Scalable Systems and Data Management**, course project, Aalto University
+> Eero Huhtala, Marika Laine, Noora Puhakka
+> Dataset: [DEBS 2022 Grand Challenge (Zenodo)](https://zenodo.org/records/6382482)
 
-This document is the **development guide** for building, testing, and debugging the system components.
+A streaming system that replays one week of real financial tick data (8–12 November 2021, about 59 M trades for 4,970 symbols on three exchanges) and, for every symbol and 5-minute window, computes EMA38 and EMA100 (Query 1) and issues BUY/SELL advisories when they cross (Query 2). The results are shown live in a web dashboard.
+
+**Where to find what:**
+
+| | |
+|---|---|
+| Evaluation results (throughput, latency, scaling, correctness) | [`bench/RESULTS.md`](bench/RESULTS.md) |
+| How to run the benchmarks | [`bench/README.md`](bench/README.md) |
+| Independent ground truth and correctness check | [`scripts/README.md`](scripts/README.md) |
+| Data producer | [`producer/README.md`](producer/README.md) |
+| Stream analyzer | [`analyzer/README.md`](analyzer/README.md) |
 
 ---
 
-## 1. System Pipeline & Data Flow
+## 1. Quick start
+
+Requirements: Docker with Docker Compose, and Go 1.25+ for the data preparation.
+
+1. **Download data.** Put the raw day files from [Zenodo](https://zenodo.org/records/6382482) in `data/` (ignored by git), e.g. `data/debs2022-gc-trading-day-08-11-21.csv`.
+2. **Clean the data.** The containerized producer reads `data/trades_cleaned.csv.gz`. For one day:
+   ```bash
+   go run scripts/clean_data.go --only-trades \
+     --input=data/debs2022-gc-trading-day-08-11-21.csv \
+     --output=data/trades_cleaned.csv.gz
+   ```
+   To build the whole week used in the evaluation, see [`scripts/README.md`](scripts/README.md).
+3. **Start everything:**
+   ```bash
+   docker compose --profile app up -d --build
+   ```
+   This starts Redpanda, the producer, the analyzer, the gateway and the frontend. The producer replays at full speed by default; to watch the dashboard update live, set `REPLAY_MODE=realtime` for the producer in `docker-compose.yml`.
+4. **Open the dashboard** at [http://localhost:3000](http://localhost:3000). The gateway also serves it at [http://localhost:8081](http://localhost:8081), and the Redpanda Console is at [http://localhost:8080](http://localhost:8080).
+
+---
+
+## 2. System pipeline
 
 ```
 ┌─────────────────────┐
-│ 1. Data Producer    │ ──► Reads CSV and replays ticks to broker
+│ 1. Data Producer    │ ──► Reads the CSV and replays ticks to the broker
 └──────────┬──────────┘
            │
-           ▼ (Topic: "market-ticks", Partition Key: Symbol)
+           ▼ (Topic: "market-ticks", partition key: symbol)
 ┌─────────────────────┐
-│ 2. Message Broker   │ ──► Redpanda cluster (Kafka API, strict FIFO per symbol)
+│ 2. Message Broker   │ ──► Redpanda (Kafka API, ordered per symbol)
 └──────────┬──────────┘
            │
            ▼
@@ -26,212 +58,152 @@ This document is the **development guide** for building, testing, and debugging 
            │
            ▼ (Topic: "trading-signals")
 ┌─────────────────────┐
-│ 4. Web Gateway      │ ──► WebSocket server broadcasting indicators and signals
+│ 4. Web Gateway      │ ──► WebSocket server for indicators and advisories
 └──────────┬──────────┘
            │
            ▼
 ┌─────────────────────┐
-│ 5. Web Frontend     │ ──► Live market dashboard with charts and buy/sell alerts
+│ 5. Web Frontend     │ ──► Live dashboard with charts and buy/sell alerts
 └─────────────────────┘
 ```
 
----
+Both topics have 4 partitions. Docker Compose creates them on startup.
 
-## 2. Local Environment Setup
-
-### Prerequisites
-- **Docker & Docker Compose**
-- **Go 1.25+**
-
-### Step 1: Start the Local Infrastructure
-Run the Redpanda message broker, web console, and topic initializer:
-
-```bash
-docker compose up -d
-```
-
-- **Kafka Broker Endpoint:** `localhost:19092` (used by Go apps running locally)
-- **Redpanda Web Console:** [http://localhost:8080](http://localhost:8080)
-- **Pre-created Topics:**
-  - `market-ticks` (4 partitions)
-  - `trading-signals` (4 partitions)
-
-To verify the broker is healthy:
-```bash
-docker compose ps
-docker exec -it redpanda rpk topic list --brokers redpanda:9092
-```
+| Service | Address |
+|---|---|
+| Kafka API for programs on the host | `localhost:19092` |
+| Kafka API inside Docker | `redpanda:9092` |
+| Redpanda Console | [http://localhost:8080](http://localhost:8080) |
+| Gateway (WebSocket and REST) | [http://localhost:8081](http://localhost:8081) |
+| Frontend | [http://localhost:3000](http://localhost:3000) |
 
 ---
 
-## 3. Dataset & Preparation
+## 3. Message schemas
 
-### Downloading Data
-Place the raw day CSVs from [Zenodo](https://zenodo.org/records/6382482) inside the `data/` directory (ignored by git):
-```text
-data/debs2022-gc-trading-day-08-11-21.csv
-```
+All message types are defined in [`pkg/models/tick.go`](pkg/models/tick.go).
 
-### Preprocessing the Dataset
-The raw dataset contains 27+ attributes and millions of housekeeping rows. Use [`scripts/clean_data.go`](scripts/clean_data.go) to extract only the starred attributes required by the assignment (`ID`, `SecType`, `Date`, `Time`, `Last`, `TradingTime`, `TradingDate`):
+### 3.1 Topic `market-ticks` (producer → analyzer)
 
-see scripts/readme.md
-
----
-
-## 4. Message Schemas & Contracts
-
-All inter-service message schemas are centrally defined in [`pkg/models/tick.go`](pkg/models/tick.go).
-
-### 4.1 Topic: `market-ticks` (Input of Component 3 Analyzer)
-- **Partition Key:** `ID` (e.g. `RDSA.NL`). Ensures all ticks for a given symbol are delivered in strict FIFO order to the same partition.
-- **Payload Schema:**
-  ```json
-  {
-    "id": "RDSA.NL",
-    "sec_type": "E",
-    "timestamp": "2021-11-08T09:00:00.123Z",
-    "price": 18.45,
-    "trading_date": "08-11-2021",
-    "trading_time": "09:00:00.123"
-  }
-  ```
-
-### 4.2 Topic: `trading-signals` (Output of Component 3 Analyzer ➔ Input of Component 4 Gateway)
-
-Every time a 5-minute tumbling window completes for a symbol, the Stream Analyzer emits a JSON message to `trading-signals` with the following structure:
+Ticks are keyed by symbol (`ID`, e.g. `RDSA.NL`), so all ticks of a symbol go to the same partition in order:
 
 ```json
 {
+  "id": "RDSA.NL",
+  "sec_type": "E",
+  "timestamp": "2021-11-08T09:00:00.123Z",
+  "price": 18.45,
+  "trading_date": "08-11-2021",
+  "trading_time": "09:00:00.123"
+}
+```
+
+The producer also sends heartbeats and an end-of-stream message to every partition. The `kind` header (`tick`, `heartbeat` or `eos`) tells them apart, and the `produced_at` header carries the send time for latency measurement. See [`producer/README.md`](producer/README.md) and [`analyzer/README.md`](analyzer/README.md).
+
+### 3.2 Topic `trading-signals` (analyzer → gateway)
+
+The analyzer publishes two kinds of messages, told apart by the `kind` field.
+
+**Window indicator** (Query 1), one per symbol per closed window. `signal` is present only if the window produced an advisory:
+
+```json
+{
+  "kind": "indicator",
   "symbol": "RDSA.NL",
   "sec_type": "E",
   "window_start": "2021-11-08T09:00:00Z",
   "window_end": "2021-11-08T09:05:00Z",
-  "window_index": 108,
   "last_price": 19.852,
+  "has_tick": true,
   "ema_38": 19.824,
   "ema_100": 19.780,
   "signal": "BUY",
-  "trade_count": 142,
-  "timestamp": "2021-11-08T09:05:00Z"
+  "produced_at": "2026-11-13T20:00:01.123Z",
+  "ingested_at": "2026-11-13T20:00:01.131Z",
+  "emitted_at": "2026-11-13T20:00:01.132Z"
 }
 ```
 
-### 4.3 Web Gateway API & WebSocket Protocol (Components 4 & 5)
+**Advisory** (Query 2), one per BUY or SELL crossover:
 
-#### WebSocket Endpoint: `ws://localhost:8081/ws`
-Supports real-time filtered streaming between the browser frontend and gateway.
-
-**Client Commands (Inbound to Gateway):**
 ```json
-// Subscribe to specific symbols
-{ "action": "subscribe", "symbols": ["RDSA.NL", "AIR.FR"] }
-
-// Unsubscribe
-{ "action": "unsubscribe", "symbols": ["RDSA.NL"] }
-
-// Request window history for chart rendering
-{ "action": "get_history", "symbol": "RDSA.NL" }
-
-// Heartbeat ping
-{ "action": "ping" }
+{
+  "kind": "signal",
+  "symbol": "RDSA.NL",
+  "sec_type": "E",
+  "type": "BUY",
+  "window_start": "2021-11-08T09:00:00Z",
+  "timestamp": "2021-11-08T09:05:00Z",
+  "price": 19.852,
+  "ema_38": 19.824,
+  "ema_100": 19.780,
+  "prev_ema_38": 19.771,
+  "prev_ema_100": 19.779,
+  "produced_at": "2026-11-13T20:00:01.123Z",
+  "ingested_at": "2026-11-13T20:00:01.131Z",
+  "emitted_at": "2026-11-13T20:00:01.132Z"
+}
 ```
 
-**Gateway Events (Outbound to Client):**
-- `type: "info"`: Server handshake with available symbols, stats, and recent alerts.
-- `type: "signal"`: Live window update for subscribed symbol (`data: SignalEvent`).
-- `type: "alert"`: Immediate breakout advisory broadcast (`data: SignalEvent`).
-- `type: "history"`: Historical window array for charting (`data: []SignalEvent`).
+`produced_at`, `ingested_at` and `emitted_at` are wall-clock times of the tick that closed the window, used for latency measurement.
 
-#### REST Endpoints:
-- `GET http://localhost:8081/health`: Gateway healthcheck and active client count.
-- `GET http://localhost:8081/api/symbols`: JSON list of all known symbols.
-- `GET http://localhost:8081/api/history?symbol=RDSA.NL&limit=200`: Historical candle/EMA points.
-- `GET http://localhost:8081/api/alerts?limit=50`: Recent BUY and SELL advisories.
-- `GET http://localhost:8081/api/stats`: Store and throughput metrics.
+### 3.3 Gateway API (gateway → frontend)
 
-### 4.4 Data Producer Replay Modes
+**WebSocket** at `ws://localhost:8081/ws`. Client commands:
 
-The Data Producer supports streaming directly from `.csv.gz` and `.csv` files:
+| Command | Effect |
+|---|---|
+| `{"action": "subscribe", "symbols": ["RDSA.NL"]}` | Receive window updates for these symbols, starting with their history |
+| `{"action": "unsubscribe", "symbols": ["RDSA.NL"]}` | Stop receiving them |
+| `{"action": "subscribe_all"}` / `{"action": "unsubscribe_all"}` | Receive updates for every symbol / none |
+| `{"action": "get_history", "symbol": "RDSA.NL"}` | Window history for the chart |
+| `{"action": "get_symbols"}` | List of known symbols |
+| `{"action": "get_markets"}` | Market overview, sent again as an `info` message |
+| `{"action": "ping"}` | Answered with `pong` |
 
-```bash
-# Benchmark Mode (max throughput)
-go run ./producer -input data/trades_cleaned.csv.gz -brokers localhost:19092
+Server messages have a `type`:
+- `info`: sent on connect, with symbols, statistics and recent alerts
+- `signal`: a window update for a subscribed symbol
+- `alert`: a BUY/SELL advisory, sent to every client
+- `history`: window history for one symbol
+- `symbols`: the symbol list
+- `pong`: the answer to `ping`
 
-# Fixed Rate Mode (e.g. 5,000 events/second)
-go run ./producer -input data/trades_cleaned.csv.gz -mode rate -rate 5000
+**REST endpoints:**
 
-# Simulated Real-Time Mode (e.g. 10x accelerated historical replay)
-go run ./producer -input data/trades_cleaned.csv.gz -mode realtime -speed 10.0
-```
-```
+| Endpoint | Returns |
+|---|---|
+| `GET /health` | Health check and number of connected clients |
+| `GET /api/symbols` | All known symbols |
+| `GET /api/markets?limit=50` | One summary per symbol, most active first |
+| `GET /api/history?symbol=RDSA.NL&limit=200` | Window history (close price and EMAs) of one symbol |
+| `GET /api/alerts?limit=50` | Recent BUY and SELL advisories |
+| `GET /api/snapshot` | The latest event of every symbol |
+| `GET /api/stats` | Store and throughput statistics |
 
 ---
 
-## 5. Daily Development Workflow
+## 4. Development
 
-### Local Development vs. Docker Compose Development
+**Run services locally** against Redpanda in Docker. This starts quickly and is easy to debug:
 
-This project supports two development modes:
+```bash
+docker compose up -d                                          # Redpanda and the Console only
+go run ./analyzer
+go run ./producer -input data/trades_cleaned.csv.gz -mode realtime -speed 10
+go run ./gateway                                              # dashboard at http://localhost:8081
+```
 
-| Mode | How it Runs | When to Use | Advantages |
-|---|---|---|---|
-| **Local Mode** *(Recommended for coding)* | **Broker in Docker**, Go apps run locally on your machine (`go run ...`) | Daily coding, implementing features, fixing bugs, unit testing | • **Instant feedback:** Runs immediately in <1s (no waiting for Docker images to rebuild)<br>• **Native debugging:** 1-click breakpoints and variable inspection in VS Code / GoLand<br>• **Fast tests:** Instant `go test ./...`<br>• **Resource-light:** Saves laptop RAM and battery |
-| **Docker Compose Mode** *(Staging & Submission)* | **Everything in Docker** (`docker compose --profile app up -d --build`) | Integration testing, final verification, grading submission | • **Environment parity:** Guarantees everything works in isolated containers on any teammate's machine<br>• **Zero local dependencies:** Team members don't need Go or tools installed to test the full stack |
+**Run everything in Docker,** as in the quick start:
 
-#### How to Use Local Mode:
-1. Start Redpanda in Docker:
-   ```bash
-   docker compose up -d
-   ```
-2. Run your Go services directly in terminal or IDE:
-   ```bash
-   # Go apps connect to localhost:19092
-   go run ./analyzer/main.go
-   go run ./producer/main.go -input data/sample_ticks.csv
-   ```
-
-#### How to Use Docker Compose Mode:
-When you are ready to test the entire containerized pipeline together:
 ```bash
 docker compose --profile app up -d --build
 ```
 
----
+The producer's replay modes (`max`, `rate`, `realtime`) and options are described in [`producer/README.md`](producer/README.md).
 
-## 6. Code Quality & Tooling (Formatting, Linting & Testing)
+**Tests:**
 
-Go includes robust built-in tooling that eliminates the need for heavy external linters in most projects.
-
-### Built-in Go Tools (No Extra Installation Needed)
-
-- **`go fmt ./...` (Auto-Formatter):**
-  Enforces the official Go style standard across all files. Run this before committing:
-  ```bash
-  go fmt ./...
-  ```
-- **`go vet ./...` (Official Static Analyzer & Bug Finder):**
-  Inspects code for subtle bugs, unreachable code, printf format errors, bad mutex usage, and suspicious logic:
-  ```bash
-  go vet ./...
-  ```
-- **`go build ./...` (Fast Syntax & Type Check):**
-  Compiles all packages to verify syntax and types without outputting binary files:
-  ```bash
-  go build ./...
-  ```
-- **`go test -race ./...` (Concurrency Race Detector):**
-  Detects unsynchronized concurrent read/write memory access at runtime. Highly recommended when testing the stream analyzer:
-  ```bash
-  go test -race ./...
-  ```
-
-### Recommended Editor Setup (Real-Time Error Checking)
-
-- **VS Code:** Install the official **Go extension** by the Go team (`golang.go`). It automatically runs `gopls` (the Go language server), giving you:
-  - Red squiggly lines on syntax/type errors in real time as you type.
-  - Auto-completion for structs, methods, and Kafka libraries.
-  - Automatic import addition/removal and format-on-save.
-- **GoLand:** Real-time syntax checking and static analysis work out of the box.
-
-
+```bash
+go test -race ./...
+```
