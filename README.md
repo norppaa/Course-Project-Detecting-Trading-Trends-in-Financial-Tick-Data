@@ -77,6 +77,8 @@ ANALYZERS=3 GROUP_ID=run-1 docker compose --profile app up -d --build
 
 The `wait-for-analyzers` service holds the producer back until all instances have joined the group (it fails after 60 s if they don't). Set the count only with `ANALYZERS`, not with `--scale analyzer=N`: `--scale` changes the number of instances but not the number the producer waits for. Do not add or remove instances during a run either. State is in memory only, so a partition that moves to another instance restarts its EMAs from zero, and the windows it already processed are emitted twice. Started this way, 1 and 3 instances gave identical totals on 8 Nov 2021 (11,794,520 ticks, 373,126 windows, 4,840 BUY).
 
+In this setup the end-to-end throughput is limited by the producer (about 345k ticks/s in Docker), which a single analyzer already keeps up with, so adding instances lowers the load per instance but does not raise the total rate. The analyzer's own scaling was measured on a pre-filled topic, where the analyzer is the bottleneck: see [Scaling with analyzer cores](bench/RESULTS.md#scaling-with-analyzer-cores).
+
 | Service | Address |
 |---|---|
 | Kafka API for programs on the host | `localhost:19092` |
