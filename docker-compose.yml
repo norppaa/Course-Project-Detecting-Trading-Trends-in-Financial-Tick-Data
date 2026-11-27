@@ -74,8 +74,8 @@ services:
     command: >
       -c "
         echo 'Redpanda is healthy! Initializing topics...';
-        rpk topic create market-ticks --brokers redpanda:9092 --partitions 4 || true;
-        rpk topic create trading-signals --brokers redpanda:9092 --partitions 4 || true;
+        rpk topic create market-ticks --brokers redpanda:9092 --partitions 12 || true;
+        rpk topic create trading-signals --brokers redpanda:9092 --partitions 12 || true;
         echo 'Topics initialized successfully:';
         rpk topic list --brokers redpanda:9092;
       "
@@ -112,10 +112,11 @@ services:
     build:
       context: .
       dockerfile: analyzer/Dockerfile
-    container_name: stream-analyzer
+    # No container_name, so more instances can be started with
+    # `docker compose --profile app up -d --scale analyzer=N` (N <= 12 partitions).
     environment:
       - KAFKA_BROKERS=redpanda:9092
-      - GROUP_ID=stream-analyzer     # use a new id to re-read the topic from the start
+      - GROUP_ID=${GROUP_ID:-stream-analyzer}  # use a new id to re-read the topic from the start
       - GRACE=5s                     # allowed out-of-orderness of event time
       - EMPTY_WINDOW_POLICY=skip     # skip | carry
       - SUPPRESS_FIRST_SIGNAL=false  # hide the BUY each symbol gets in its first window

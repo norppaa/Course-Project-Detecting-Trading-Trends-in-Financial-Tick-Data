@@ -67,7 +67,18 @@ Requirements: Docker with Docker Compose, and Go 1.25+ for the data preparation.
 └─────────────────────┘
 ```
 
-Both topics have 4 partitions. Docker Compose creates them on startup.
+Both topics have 12 partitions, so 1, 2, 3, 4 or 6 analyzer instances share the work evenly. Docker Compose creates them on startup; topics that already exist keep their partition count, so after changing it start from a clean broker with `docker compose down -v`.
+
+To scale out the analyzer, start several instances in one consumer group (a fresh group id for each run), wait until all of them have joined, and only then start the producer:
+
+```bash
+export GROUP_ID=run-1
+docker compose --profile app up -d --build --scale analyzer=3 analyzer gateway frontend
+docker exec redpanda rpk group describe $GROUP_ID --brokers redpanda:9092   # wait for MEMBERS 3, STATE Stable
+docker compose --profile app up -d producer
+```
+
+Do not start the producer together with the analyzers, and do not add or remove instances during a run. State is in memory only, so a partition that moves to another instance restarts its EMAs from zero, and the windows it already processed are emitted twice. With the two-step start above, 1 and 3 instances gave identical totals on 8 Nov 2021 (11,794,520 ticks, 373,126 windows, 4,840 BUY).
 
 | Service | Address |
 |---|---|
