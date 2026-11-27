@@ -71,11 +71,15 @@ services:
       redpanda:
         condition: service_healthy
     entrypoint: /bin/sh
+    # retention.ms=-1: the producer stamps messages with the 2021 event time, so
+    # with the default 7-day retention Redpanda would delete ticks right away.
+    # alter-config also fixes topics left over from an older setup.
     command: >
       -c "
         echo 'Redpanda is healthy! Initializing topics...';
-        rpk topic create market-ticks --brokers redpanda:9092 --partitions 4 || true;
-        rpk topic create trading-signals --brokers redpanda:9092 --partitions 4 || true;
+        rpk topic create market-ticks --brokers redpanda:9092 --partitions 12 -c retention.ms=-1 || true;
+        rpk topic create trading-signals --brokers redpanda:9092 --partitions 12 -c retention.ms=-1 || true;
+        rpk topic alter-config market-ticks trading-signals --brokers redpanda:9092 --set retention.ms=-1;
         echo 'Topics initialized successfully:';
         rpk topic list --brokers redpanda:9092;
       "
@@ -106,16 +110,56 @@ services:
     depends_on:
       redpanda-init:
         condition: service_completed_successfully
+      wait-for-analyzers:
+        condition: service_completed_successfully
+
+  # Holds the producer back until all analyzer instances have joined the
+  # consumer group. If the replay started earlier, partitions would move
+  # between instances mid-run and their EMAs would restart from zero.
+  wait-for-analyzers:
+    profiles: ["app", "all"]
+    image: docker.redpanda.com/redpandadata/redpanda:v26.2.4
+    container_name: wait-for-analyzers
+    environment:
+      - EXPECTED=${ANALYZERS:-1}
+      - GROUP_ID=${GROUP_ID:-stream-analyzer}
+      - TIMEOUT=60
+    entrypoint: /bin/sh
+    command: >
+      -c '
+        echo "Waiting for $$EXPECTED analyzer(s) in group $$GROUP_ID...";
+        i=0;
+        while [ $$i -lt $$TIMEOUT ]; do
+          out=$$(rpk group describe "$$GROUP_ID" --brokers redpanda:9092 2>/dev/null);
+          if echo "$$out" | grep -Eq "^MEMBERS +$$EXPECTED$$" && echo "$$out" | grep -Eq "^STATE +Stable$$"; then
+            echo "Group $$GROUP_ID is stable with $$EXPECTED member(s), starting the producer.";
+            exit 0;
+          fi;
+          i=$$((i + 1)); sleep 1;
+        done;
+        echo "$$out";
+        echo "ERROR: group $$GROUP_ID did not reach $$EXPECTED stable member(s) in $${TIMEOUT}s.";
+        echo "Set the instance count only with ANALYZERS=N, not with --scale.";
+        exit 1
+      '
+    networks:
+      - redpanda-net
+    depends_on:
+      analyzer:
+        condition: service_started
 
   analyzer:
     profiles: ["app", "all"]
     build:
       context: .
       dockerfile: analyzer/Dockerfile
-    container_name: stream-analyzer
+    # No container_name, so several instances can run. Set the count with
+    # ANALYZERS=N (N <= 12 partitions); the producer waits until all have joined.
+    deploy:
+      replicas: ${ANALYZERS:-1}
     environment:
       - KAFKA_BROKERS=redpanda:9092
-      - GROUP_ID=stream-analyzer     # use a new id to re-read the topic from the start
+      - GROUP_ID=${GROUP_ID:-stream-analyzer}  # use a new id to re-read the topic from the start
       - GRACE=5s                     # allowed out-of-orderness of event time
       - EMPTY_WINDOW_POLICY=skip     # skip | carry
       - SUPPRESS_FIRST_SIGNAL=false  # hide the BUY each symbol gets in its first window

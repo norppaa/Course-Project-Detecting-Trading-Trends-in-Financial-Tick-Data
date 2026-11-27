@@ -36,7 +36,9 @@ latency; a summary is printed on shutdown (Ctrl-C).
 
 - **Consumer group (default).** Start more analyzer instances with the same
   `GROUP_ID`; Kafka splits the partitions between them. The number of input
-  partitions is the upper limit on parallelism.
+  partitions (12 in Docker Compose) is the upper limit on parallelism, and
+  the load is even when it divides by the number of instances (1, 2, 3, 4, 6).
+  In Docker: `ANALYZERS=N docker compose --profile app up -d`; see the main README.
 - **Fixed partitions.** `-partitions all` (or `0,1`) reads partitions directly
   without a group. Deterministic and good for benchmarks. Reading always
   starts from the beginning of the topic (`-start first`), so a run can be
@@ -45,7 +47,8 @@ latency; a summary is printed on shutdown (Ctrl-C).
 State (open windows, EMAs) is kept in memory only. If a partition moves to
 another instance (rebalance, restart), its EMA history starts again from zero.
 For repeatable group-mode runs use a new `GROUP_ID` each time, otherwise the
-group continues from its committed offsets.
+group continues from its committed offsets, start all instances before the
+replay, and do not add or remove instances during a run.
 
 ### Options
 
