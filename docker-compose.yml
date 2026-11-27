@@ -71,11 +71,15 @@ services:
       redpanda:
         condition: service_healthy
     entrypoint: /bin/sh
+    # retention.ms=-1: the producer stamps messages with the 2021 event time, so
+    # with the default 7-day retention Redpanda would delete ticks right away.
+    # alter-config also fixes topics left over from an older setup.
     command: >
       -c "
         echo 'Redpanda is healthy! Initializing topics...';
-        rpk topic create market-ticks --brokers redpanda:9092 --partitions 12 || true;
-        rpk topic create trading-signals --brokers redpanda:9092 --partitions 12 || true;
+        rpk topic create market-ticks --brokers redpanda:9092 --partitions 12 -c retention.ms=-1 || true;
+        rpk topic create trading-signals --brokers redpanda:9092 --partitions 12 -c retention.ms=-1 || true;
+        rpk topic alter-config market-ticks trading-signals --brokers redpanda:9092 --set retention.ms=-1;
         echo 'Topics initialized successfully:';
         rpk topic list --brokers redpanda:9092;
       "
