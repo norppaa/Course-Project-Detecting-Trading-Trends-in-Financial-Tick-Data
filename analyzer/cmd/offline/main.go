@@ -1,17 +1,15 @@
-// Command offline runs the stream analyzer engine directly over a cleaned
-// CSV file (output of scripts/clean_data.go), without Redpanda. Rows are
-// processed in file order, which is the same order the producer replays
-// them in, so the results should match the streaming pipeline exactly.
+// Offline stream analyzer. Useful for testing and benchmarking the engine 
+// in isolation from the broker and producer. It also allows analyzing the dataset 
+// for out-of-order events.
 //
+// The input CSV must have been cleaned by scripts/clean_data.go, which ensures
+// that the columns are in the expected order and that the price is non-empty.
+
 // Uses:
 //   - correctness: diff results against the ground truth
 //   - performance: raw engine throughput, separate from broker overhead
 //   - dataset analysis: how out of order trading times are (to pick Grace)
-//
-// Example:
-//
-//	go run ./analyzer/cmd/offline -input data/trades_only_08-11-21.csv \
-//	    -output data/results_08-11-21.csv -grace 5s
+
 package main
 
 import (
@@ -28,7 +26,6 @@ import (
 	"trading-trends/analyzer/engine"
 )
 
-// Column order written by scripts/clean_data.go.
 const (
 	colID = iota
 	colSecType

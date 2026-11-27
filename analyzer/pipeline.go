@@ -10,11 +10,8 @@ import (
 	"trading-trends/pkg/models"
 )
 
-// This file is the broker-independent part of the online analyzer: one
-// worker goroutine per input partition, each owning its own engine.Engine.
-// A symbol always lives in exactly one partition (the producer keys by
-// symbol), so workers share no state and need no locks on the hot path.
-// main.go connects workers to Kafka; the tests drive them directly.
+// Pipeline is broker-independent part of the online analyzer: one worker per input partition, each owning its own engine.Engine.
+// A symbol always lives in exactly one partition (the producer keys by symbol), so workers share no state and need no locks on the hot path.
 
 // inMsg is one input message handed to a worker.
 type inMsg struct {
@@ -24,7 +21,7 @@ type inMsg struct {
 	receivedAt time.Time // wall clock when the analyzer read the message
 }
 
-// kindIdleFlush is internal: sent by the idle detector, never on the wire.
+// It tells the worker to flush all open windows, even if no end-of-stream marker has arrived.
 const kindIdleFlush = "idle-flush"
 
 // outMsg is one result to publish.
@@ -35,8 +32,7 @@ type outMsg struct {
 	value []byte
 }
 
-// Sink publishes results. Implementations must be safe for concurrent use
-// by several workers and must not keep the slice after returning.
+// Publishers results. 
 type Sink interface {
 	Send(msgs []outMsg) error
 }
@@ -56,7 +52,7 @@ type workerStats struct {
 	LatencyMaxUs int64
 	LatencyCount int64
 }
-
+// worker owns one engine.Engine and processes messages for one partition.
 type worker struct {
 	partition int
 	cfg       *Config
@@ -107,9 +103,7 @@ func (w *worker) handle(m inMsg) {
 			w.st.BadMessages++
 			return
 		}
-		// With -only-trades=false the producer also forwards quotes and
-		// housekeeping events, which carry no trade price. They are expected
-		// input, not errors, so they get their own counter.
+		// Counter for non-trade events, used if -only-trades=false. 
 		if !(t.Price > 0) {
 			w.st.NonTrades++
 			return
@@ -152,7 +146,6 @@ func (w *worker) handle(m inMsg) {
 	}
 }
 
-// emit converts the windows closed by message m into output messages.
 func (w *worker) emit(trigger inMsg) {
 	now := time.Now().UTC()
 	timing := models.Timing{
@@ -225,7 +218,7 @@ func (w *worker) emit(trigger inMsg) {
 
 func (w *worker) add(topic, key, kind string, v any) {
 	b, err := json.Marshal(v)
-	if err != nil { // cannot happen for these types
+	if err != nil { 
 		w.st.BadMessages++
 		return
 	}
@@ -245,7 +238,6 @@ func (w *worker) stats() workerStats {
 	return w.snap
 }
 
-// dispatcher owns the workers and routes messages to them by partition.
 type dispatcher struct {
 	cfg  *Config
 	sink Sink
@@ -263,7 +255,6 @@ func newDispatcher(cfg *Config, sink Sink) *dispatcher {
 	return &dispatcher{cfg: cfg, sink: sink, workers: make(map[int]*worker)}
 }
 
-// worker returns the worker for a partition, starting it on first use.
 func (d *dispatcher) worker(partition int) *worker {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -281,7 +272,7 @@ func (d *dispatcher) worker(partition int) *worker {
 }
 
 // dispatch hands m to the partition's worker. It blocks if the worker's
-// queue is full, which applies back-pressure to the broker reader.
+// queue is full, which applies back-pressure to the broker reader. 
 func (d *dispatcher) dispatch(partition int, m inMsg) {
 	d.received.Add(1)
 	d.firstInput.CompareAndSwap(0, m.receivedAt.UnixNano())
@@ -289,9 +280,7 @@ func (d *dispatcher) dispatch(partition int, m inMsg) {
 	d.worker(partition).in <- m
 }
 
-// idleFlush closes all open windows in every worker. Used when the input has
-// been silent for a while, i.e. the replay is over and no end-of-stream
-// marker arrived.
+// idleFlush closes all open windows in every worker. 
 func (d *dispatcher) idleFlush() {
 	for _, w := range d.all() {
 		w.in <- inMsg{kind: kindIdleFlush}
@@ -309,7 +298,6 @@ func (d *dispatcher) all() []*worker {
 }
 
 // close stops all workers after they have drained their queues.
-// No dispatch may happen during or after close.
 func (d *dispatcher) close() {
 	for _, w := range d.all() {
 		close(w.in)

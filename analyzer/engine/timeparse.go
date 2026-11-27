@@ -5,13 +5,7 @@ import (
 	"time"
 )
 
-// Event times are represented as int64 microseconds since the Unix epoch,
-// interpreting the dataset's date and time as a naive wall clock
-// (as if it were UTC). Because every UTC day is a whole multiple of
-// 5 minutes, window boundaries then fall exactly on local midnight, which is
-// what the spec requires ("the first window w0 starts at 0:00").
-// No time-zone conversion is done anywhere, so CET/CEST does not matter.
-
+// Event times are int64 microseconds. Every day is a whole multiple of 5 minutes, so window boundaries fall exactly on local midnight.
 const (
 	Microsecond int64 = 1
 	Millisecond       = 1000 * Microsecond
@@ -22,17 +16,14 @@ const (
 
 var ErrBadTimestamp = errors.New("engine: malformed timestamp")
 
-// TimeParser converts the dataset's "DD-MM-YYYY" dates and "HH:MM:SS.ssss"
-// times into event times. It caches the most recent date, since consecutive
-// rows almost always share it. Not safe for concurrent use; give each
-// goroutine its own parser.
+// Convert a date and time string into an event time in microseconds. 
+// The date is in "DD-MM-YYYY" format, and the clock is in "HH:MM:SS" format.
+// Not safe for concurrent use; give each goroutine its own parser.
 type TimeParser struct {
 	lastDate  string
 	lastDayUs int64
 }
 
-// Parse returns the event time in microseconds for a date and time string.
-// The fractional part may have 0 to 6 digits.
 func (p *TimeParser) Parse(date, clock string) (int64, error) {
 	day, err := p.parseDate(date)
 	if err != nil {
@@ -64,8 +55,6 @@ func (p *TimeParser) parseDate(s string) (int64, error) {
 	return us, nil
 }
 
-// parseClock parses "HH:MM:SS" with an optional ".f" to ".ffffff" suffix
-// and returns microseconds since midnight.
 func parseClock(s string) (int64, error) {
 	if len(s) < 8 || s[2] != ':' || s[5] != ':' {
 		return 0, ErrBadTimestamp
@@ -95,7 +84,7 @@ func parseClock(s string) (int64, error) {
 	return us + int64(f), nil
 }
 
-// atoi parses a non-empty string of ASCII digits.
+// Parse a string of ASCII digits into an integer. 
 func atoi(s string) (int, bool) {
 	if s == "" {
 		return 0, false

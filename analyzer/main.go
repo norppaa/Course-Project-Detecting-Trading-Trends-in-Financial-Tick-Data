@@ -1,5 +1,4 @@
-// Command analyzer is the online stream analyzer (component 3).
-//
+// Online strem analyer.
 // It consumes ticks from the "market-ticks" topic, computes Query 1
 // (EMA38/EMA100 per symbol over 5-minute event-time tumbling windows) and
 // Query 2 (BUY/SELL crossover advisories), and publishes the results as JSON
@@ -7,6 +6,7 @@
 // with the offline tool in ./cmd/offline, so both give the same results.
 //
 // See analyzer/README.md for the options and the message contract.
+
 package main
 
 import (
@@ -78,7 +78,7 @@ loop:
 	log.Println("[Analyzer] shutting down...")
 	readers.Wait()
 	in.close()
-	d.close() // drain worker queues (open windows stay open: no flush on exit)
+	d.close() // drain worker queues 
 	if err := sink.Close(); err != nil {
 		log.Printf("[Analyzer] closing writer: %v", err)
 	}
@@ -114,9 +114,6 @@ func logConfig(cfg *Config) {
 }
 
 // ------------------------------------------------------------------ input
-
-// input reads market-ticks either through a consumer group (one reader,
-// Kafka assigns partitions) or from explicit partitions (one reader each).
 type input struct {
 	cfg     *Config
 	mu      sync.Mutex
@@ -181,7 +178,6 @@ func (in *input) run(ctx context.Context, d *dispatcher) error {
 	return first
 }
 
-// consume reads messages until ctx is cancelled and hands them to workers.
 func consume(ctx context.Context, r *kafka.Reader, d *dispatcher) error {
 	for {
 		msg, err := r.ReadMessage(ctx)
@@ -243,7 +239,6 @@ func (in *input) add(r *kafka.Reader) {
 	in.mu.Unlock()
 }
 
-// lag sums the consumer lag of all readers (messages behind the log end).
 func (in *input) lag() int64 {
 	in.mu.Lock()
 	defer in.mu.Unlock()
@@ -265,7 +260,6 @@ func (in *input) close() {
 }
 
 // ------------------------------------------------------------------ output
-
 type kafkaSink struct {
 	w      *kafka.Writer
 	sent   atomic.Int64
@@ -276,7 +270,7 @@ func newKafkaSink(cfg *Config) *kafkaSink {
 	s := &kafkaSink{}
 	s.w = &kafka.Writer{
 		Addr:                   kafka.TCP(cfg.Brokers...),
-		Balancer:               &kafka.Hash{}, // results for a symbol stay in order
+		Balancer:               &kafka.Hash{}, 
 		BatchSize:              cfg.BatchSize,
 		BatchTimeout:           cfg.BatchTimeout,
 		RequiredAcks:           kafka.RequireOne,
@@ -311,7 +305,6 @@ func (s *kafkaSink) Send(msgs []outMsg) error {
 func (s *kafkaSink) Close() error { return s.w.Close() }
 
 // ------------------------------------------------------------------ metrics
-
 type metrics struct {
 	start, last time.Time
 	lastTicks   int64
@@ -364,12 +357,10 @@ func (m *metrics) log(now time.Time, d *dispatcher, in *input, s *kafkaSink) {
 		avgLat, time.Duration(t.LatencyMaxUs)*time.Microsecond)
 }
 
+// summary prints a final summary of the run, including throughput and total counts.
 func (m *metrics) summary(d *dispatcher) {
 	t, _, _ := m.totals(d)
 	el := time.Since(m.start)
-	// Throughput over the time input was actually flowing (first to last
-	// message), so idle time before the producer starts or after it ends
-	// does not dilute it.
 	active := time.Duration(d.lastInput.Load() - d.firstInput.Load())
 	rate, msgRate := 0.0, 0.0
 	if active > 0 {

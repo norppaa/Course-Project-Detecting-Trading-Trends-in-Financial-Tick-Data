@@ -1,8 +1,6 @@
-// Package engine implements Query 1 (EMA38/EMA100 over 5-minute event-time
-// tumbling windows) and Query 2 (bullish/bearish crossover advisories) as
-// pure logic with no I/O. The Redpanda consumer feeds it ticks and
-// watermarks; it hands back closed-window results through a callback.
-//
+// Engine implements the core logic of the EMA38/EMA100 crossover analysis. It is
+// designed to be fed ticks and watermarks from a Redpanda consumer, and to
+// emit closed-window results through a callback.
 // One Engine instance per partition: a symbol always lives in exactly one
 // partition, so an Engine never needs locks.
 package engine
@@ -11,13 +9,12 @@ import (
 	"sort"
 )
 
-// EMA smoothing factors from the spec: alpha_j = 2 / (1 + j).
+// EMA smoothing factors from the spec
 const (
 	Alpha38  = 2.0 / (1.0 + 38.0)
 	Alpha100 = 2.0 / (1.0 + 100.0)
 )
 
-// Signal is the advisory produced for a window by Query 2.
 type Signal int8
 
 const (
@@ -36,36 +33,23 @@ func (s Signal) String() string {
 		return "NONE"
 	}
 }
-
-// EmptyWindowPolicy decides what happens for a symbol in a window with no
-// price event. The team must pick one and the ground truth must match it.
+// EmptyWindowPolicy controls how the engine evaluates windows with no price events.
+// Carry is used in the report, but the system can also be configured to Skip empty windows.
 type EmptyWindowPolicy int8
 
 const (
-	// SkipEmpty evaluates a symbol only in windows where it had a price
-	// event. "Previous window" in Eq. 2 and 4 means the symbol's previous
-	// evaluated window. EMAs are effectively frozen across gaps.
-	SkipEmpty EmptyWindowPolicy = iota
-	// CarryLastClose evaluates every window after a symbol's first price,
-	// reusing the last known close when a window is empty. EMAs keep
-	// converging toward the last price across gaps (nights, weekend), and a
-	// crossover can fire in a window with no trades.
-	CarryLastClose
+	SkipEmpty EmptyWindowPolicy = iota 		// skip empty windows
+	CarryLastClose 							// carry the last close to empty windows
 )
 
 // Config controls the engine.
 type Config struct {
-	WindowSize int64 // microseconds; default 5 minutes
-	Grace      int64 // allowed out-of-orderness, microseconds; default 0
+	WindowSize int64 			// microseconds; default 5 minutes
+	Grace      int64 			// allowed out-of-orderness, microseconds; default 0, 5s used in the report
 	Policy     EmptyWindowPolicy
-	// SuppressFirstSignal drops the advisory in a symbol's first evaluated
-	// window. With EMA_{s,w0} = 0 for both EMAs, the first window always
-	// satisfies Eq. 1 & 2 (EMA38 = 0.051p > EMA100 = 0.020p, previous
-	// 0 <= 0), so every symbol would otherwise get a BUY on its first trade.
-	SuppressFirstSignal bool
+	SuppressFirstSignal bool	// drops first window; default true
 }
 
-// Tick is one price event (a row with non-null Last).
 type Tick struct {
 	Symbol    string
 	SecType   byte
@@ -73,14 +57,14 @@ type Tick struct {
 	EventTime int64 // µs, see timeparse.go
 }
 
-// WindowResult is emitted for each (symbol, window) that is evaluated.
+// WindowResult for each (symbol, window) that is evaluated.
 type WindowResult struct {
 	Symbol      string
 	SecType     byte
-	WindowStart int64 // µs, inclusive
-	WindowEnd   int64 // µs, exclusive
+	WindowStart int64 	// µs, inclusive
+	WindowEnd   int64 	// µs, exclusive
 	Close       float64
-	HasTick     bool // false if Close was carried forward (CarryLastClose)
+	HasTick     bool 	// false if Close was carried forward (CarryLastClose)
 	EMA38       float64
 	EMA100      float64
 	PrevEMA38   float64 // EMAs of the symbol's previous evaluated window
@@ -88,7 +72,7 @@ type WindowResult struct {
 	Signal      Signal
 }
 
-// Stats are counters for the report and for debugging.
+// counters for the report and for debugging.
 type Stats struct {
 	TicksAccepted   int64
 	TicksLate       int64 // dropped: their window had already closed
@@ -99,7 +83,7 @@ type Stats struct {
 	ClosedBeforeIdx int64 // all windows with index < this are closed
 }
 
-// Detect applies the crossover rules (Eq. 1-4) to the EMAs of the previous
+// Applies the crossover rules (Eq. 1-4) to the EMAs of the previous
 // and current window.
 func Detect(prev38, prev100, cur38, cur100 float64) Signal {
 	switch {
@@ -129,7 +113,7 @@ type symbolState struct {
 	ema100    float64
 }
 
-// Engine holds per-symbol state for one partition.
+// Holds per-symbol state for one partition.
 type Engine struct {
 	cfg     Config
 	emit    func(WindowResult)
@@ -138,13 +122,13 @@ type Engine struct {
 
 	maxEventTime int64
 	watermark    int64
-	closedBefore int64 // window indices < closedBefore are closed
+	closedBefore int64 				// window indices < closedBefore are closed
 
 	buf   []WindowResult
 	stats Stats
 }
 
-// New creates an engine. emit is called for every evaluated window, in
+// Creates an engine. emit is called for every evaluated window, in
 // order of (WindowStart, Symbol) within each batch of closed windows.
 func New(cfg Config, emit func(WindowResult)) *Engine {
 	if cfg.WindowSize <= 0 {
@@ -166,8 +150,7 @@ func New(cfg Config, emit func(WindowResult)) *Engine {
 
 func (e *Engine) windowIndex(ts int64) int64 { return ts / e.cfg.WindowSize }
 
-// Process ingests one tick. It may close windows (and call emit) if the
-// tick advances the watermark.
+// Ingests one tick. Closes windows (and call emit) if the tick advances the watermark.
 func (e *Engine) Process(t Tick) {
 	idx := e.windowIndex(t.EventTime)
 	if idx < e.closedBefore {
@@ -190,10 +173,7 @@ func (e *Engine) Process(t Tick) {
 	}
 }
 
-// AdvanceWatermark tells the engine that no more events with event time
-// below wm are expected (beyond those already accepted). Call it for
-// heartbeat messages so windows of quiet partitions still close.
-// Watermarks never move backwards.
+// Windows with index < wm/WindowSize are closed and emitted.
 func (e *Engine) AdvanceWatermark(wm int64) {
 	if wm <= e.watermark {
 		return
@@ -204,8 +184,7 @@ func (e *Engine) AdvanceWatermark(wm int64) {
 	}
 }
 
-// Flush closes every window up to and including the one holding the latest
-// event seen. Call it at the end of a bounded input (e.g. a replayed day).
+// It is a no-op if no events have been seen.
 func (e *Engine) Flush() {
 	if e.maxEventTime == 0 && len(e.dirty) == 0 {
 		return
@@ -219,7 +198,7 @@ func (e *Engine) Flush() {
 	}
 }
 
-// Stats returns a snapshot of the counters.
+// Returns a snapshot of the counters.
 func (e *Engine) Stats() Stats {
 	s := e.stats
 	s.Watermark = e.watermark
@@ -227,12 +206,11 @@ func (e *Engine) Stats() Stats {
 	return s
 }
 
+// Adds a price to the pending windows of a symbol. If the window already has a price, it is replaced if the new event time is later.
 func (st *symbolState) addPrice(idx, ts int64, price float64) {
-	// Usually the window is the last pending one; scan from the back.
 	for i := len(st.pending) - 1; i >= 0; i-- {
 		p := &st.pending[i]
 		if p.idx == idx {
-			// Close = last price by event time. Ties go to the later arrival.
 			if ts >= p.ts {
 				p.ts, p.price = ts, price
 			}
@@ -250,7 +228,7 @@ func (st *symbolState) addPrice(idx, ts int64, price float64) {
 	st.pending[0] = pendingWin{idx: idx, ts: ts, price: price}
 }
 
-// closeBefore evaluates all windows with index < limit and emits results.
+// The windows are closed in order of (WindowStart, Symbol) within each batch.
 func (e *Engine) closeBefore(limit int64) {
 	e.buf = e.buf[:0]
 	switch e.cfg.Policy {
