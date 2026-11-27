@@ -78,7 +78,7 @@ loop:
 	log.Println("[Analyzer] shutting down...")
 	readers.Wait()
 	in.close()
-	d.close() // drain worker queues 
+	d.close() // drain worker queues
 	if err := sink.Close(); err != nil {
 		log.Printf("[Analyzer] closing writer: %v", err)
 	}
@@ -270,7 +270,7 @@ func newKafkaSink(cfg *Config) *kafkaSink {
 	s := &kafkaSink{}
 	s.w = &kafka.Writer{
 		Addr:                   kafka.TCP(cfg.Brokers...),
-		Balancer:               &kafka.Hash{}, 
+		Balancer:               &kafka.Hash{},
 		BatchSize:              cfg.BatchSize,
 		BatchTimeout:           cfg.BatchTimeout,
 		RequiredAcks:           kafka.RequireOne,

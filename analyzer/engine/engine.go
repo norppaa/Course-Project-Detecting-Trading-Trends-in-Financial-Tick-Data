@@ -33,21 +33,22 @@ func (s Signal) String() string {
 		return "NONE"
 	}
 }
+
 // EmptyWindowPolicy controls how the engine evaluates windows with no price events.
 // Carry is used in the report, but the system can also be configured to Skip empty windows.
 type EmptyWindowPolicy int8
 
 const (
-	SkipEmpty EmptyWindowPolicy = iota 		// skip empty windows
-	CarryLastClose 							// carry the last close to empty windows
+	SkipEmpty      EmptyWindowPolicy = iota // skip empty windows
+	CarryLastClose                          // carry the last close to empty windows
 )
 
 // Config controls the engine.
 type Config struct {
-	WindowSize int64 			// microseconds; default 5 minutes
-	Grace      int64 			// allowed out-of-orderness, microseconds; default 0, 5s used in the report
-	Policy     EmptyWindowPolicy
-	SuppressFirstSignal bool	// drops first window; default true
+	WindowSize          int64 // microseconds; default 5 minutes
+	Grace               int64 // allowed out-of-orderness, microseconds; default 0, 5s used in the report
+	Policy              EmptyWindowPolicy
+	SuppressFirstSignal bool // drops first window; default true
 }
 
 type Tick struct {
@@ -61,10 +62,10 @@ type Tick struct {
 type WindowResult struct {
 	Symbol      string
 	SecType     byte
-	WindowStart int64 	// µs, inclusive
-	WindowEnd   int64 	// µs, exclusive
+	WindowStart int64 // µs, inclusive
+	WindowEnd   int64 // µs, exclusive
 	Close       float64
-	HasTick     bool 	// false if Close was carried forward (CarryLastClose)
+	HasTick     bool // false if Close was carried forward (CarryLastClose)
 	EMA38       float64
 	EMA100      float64
 	PrevEMA38   float64 // EMAs of the symbol's previous evaluated window
@@ -122,7 +123,7 @@ type Engine struct {
 
 	maxEventTime int64
 	watermark    int64
-	closedBefore int64 				// window indices < closedBefore are closed
+	closedBefore int64 // window indices < closedBefore are closed
 
 	buf   []WindowResult
 	stats Stats

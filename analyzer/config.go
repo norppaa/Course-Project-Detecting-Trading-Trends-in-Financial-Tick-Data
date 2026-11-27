@@ -11,24 +11,24 @@ import (
 	"trading-trends/analyzer/engine"
 )
 
-// The analyzer can be run in two modes: either it joins a consumer group (GroupID) 
+// The analyzer can be run in two modes: either it joins a consumer group (GroupID)
 // and Kafka assigns partitions, or it reads exactly the partitions given in
 // Partitions. The latter is deterministic and handy for benchmarks.
 type Config struct {
 	Brokers        []string
 	InputTopic     string
-	IndicatorTopic string 	// "" = do not publish Query 1 indicators
+	IndicatorTopic string // "" = do not publish Query 1 indicators
 	SignalTopic    string
-	GroupID    	   string 	// consumer group id (where to read with a group)
-	Partitions 	   string	// "all" or e.g. "0,1" (where to read without a group)
-	StartAt    	   string 	// "first" or "last" (where to begin without committed offsets)
+	GroupID        string // consumer group id (where to read with a group)
+	Partitions     string // "all" or e.g. "0,1" (where to read without a group)
+	StartAt        string // "first" or "last" (where to begin without committed offsets)
 
 	Engine engine.Config
 
-	IdleFlush       time.Duration	// close all windows after this long with no input; 0 = never
+	IdleFlush       time.Duration // close all windows after this long with no input; 0 = never
 	MetricsInterval time.Duration
-	WorkerBuffer    int 			// per-partition channel capacity
-	BatchSize       int 			// output writer batch size
+	WorkerBuffer    int // per-partition channel capacity
+	BatchSize       int // output writer batch size
 	BatchTimeout    time.Duration
 }
 

@@ -32,7 +32,7 @@ type outMsg struct {
 	value []byte
 }
 
-// Publishers results. 
+// Publishers results.
 type Sink interface {
 	Send(msgs []outMsg) error
 }
@@ -52,6 +52,7 @@ type workerStats struct {
 	LatencyMaxUs int64
 	LatencyCount int64
 }
+
 // worker owns one engine.Engine and processes messages for one partition.
 type worker struct {
 	partition int
@@ -103,7 +104,7 @@ func (w *worker) handle(m inMsg) {
 			w.st.BadMessages++
 			return
 		}
-		// Counter for non-trade events, used if -only-trades=false. 
+		// Counter for non-trade events, used if -only-trades=false.
 		if !(t.Price > 0) {
 			w.st.NonTrades++
 			return
@@ -218,7 +219,7 @@ func (w *worker) emit(trigger inMsg) {
 
 func (w *worker) add(topic, key, kind string, v any) {
 	b, err := json.Marshal(v)
-	if err != nil { 
+	if err != nil {
 		w.st.BadMessages++
 		return
 	}
@@ -272,7 +273,7 @@ func (d *dispatcher) worker(partition int) *worker {
 }
 
 // dispatch hands m to the partition's worker. It blocks if the worker's
-// queue is full, which applies back-pressure to the broker reader. 
+// queue is full, which applies back-pressure to the broker reader.
 func (d *dispatcher) dispatch(partition int, m inMsg) {
 	d.received.Add(1)
 	d.firstInput.CompareAndSwap(0, m.receivedAt.UnixNano())
@@ -280,7 +281,7 @@ func (d *dispatcher) dispatch(partition int, m inMsg) {
 	d.worker(partition).in <- m
 }
 
-// idleFlush closes all open windows in every worker. 
+// idleFlush closes all open windows in every worker.
 func (d *dispatcher) idleFlush() {
 	for _, w := range d.all() {
 		w.in <- inMsg{kind: kindIdleFlush}

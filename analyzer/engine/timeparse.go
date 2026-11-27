@@ -16,7 +16,7 @@ const (
 
 var ErrBadTimestamp = errors.New("engine: malformed timestamp")
 
-// Convert a date and time string into an event time in microseconds. 
+// Convert a date and time string into an event time in microseconds.
 // The date is in "DD-MM-YYYY" format, and the clock is in "HH:MM:SS" format.
 // Not safe for concurrent use; give each goroutine its own parser.
 type TimeParser struct {
@@ -84,7 +84,7 @@ func parseClock(s string) (int64, error) {
 	return us + int64(f), nil
 }
 
-// Parse a string of ASCII digits into an integer. 
+// Parse a string of ASCII digits into an integer.
 func atoi(s string) (int, bool) {
 	if s == "" {
 		return 0, false

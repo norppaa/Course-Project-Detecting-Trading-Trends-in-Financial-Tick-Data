@@ -1,5 +1,5 @@
-// Offline stream analyzer. Useful for testing and benchmarking the engine 
-// in isolation from the broker and producer. It also allows analyzing the dataset 
+// Offline stream analyzer. Useful for testing and benchmarking the engine
+// in isolation from the broker and producer. It also allows analyzing the dataset
 // for out-of-order events.
 //
 // The input CSV must have been cleaned by scripts/clean_data.go, which ensures
