@@ -38,7 +38,7 @@ latency; a summary is printed on shutdown (Ctrl-C).
   `GROUP_ID`; Kafka splits the partitions between them. The number of input
   partitions (12 in Docker Compose) is the upper limit on parallelism, and
   the load is even when it divides by the number of instances (1, 2, 3, 4, 6).
-  In Docker: `--scale analyzer=N`; see the main README for the start order.
+  In Docker: `ANALYZERS=N docker compose --profile app up -d`; see the main README.
 - **Fixed partitions.** `-partitions all` (or `0,1`) reads partitions directly
   without a group. Deterministic and good for benchmarks. Reading always
   starts from the beginning of the topic (`-start first`), so a run can be
